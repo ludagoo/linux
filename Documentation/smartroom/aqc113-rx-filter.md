@@ -70,6 +70,18 @@ Fixes: 6c1ca112a6e4 ("net: atlantic: fix AQC113 HW init: ART, L2 filter slot, MA
 
 Related: omacom/omarchy-mac-pkgs#137
 
+## Tested
+
+On the M2 Max Studio (j475c, t6021), linux-aurora `7.2.11.aurora14-1.sr1`
+(`7.2.11-14-1.sr1-ARCH`), wired link with promiscuous mode off
+(`promiscuity` 0):
+
+- DHCP lease arrived in 0.2 s.
+- IPv6 SLAAC completed.
+- Unicast ping to the router and to the Mini succeeded.
+
+The filter change above is the patch to send. No further code change.
+
 ## Test plan (Claude, on the Studio)
 
 Promiscuous mode off first:
