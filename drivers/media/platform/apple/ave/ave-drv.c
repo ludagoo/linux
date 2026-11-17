@@ -87,6 +87,36 @@ const struct ave_variant ave_t8112 = {
 };
 
 /*
+ * M2 Max (t6021) uses the M2 encoder, not the M4/A18 v40 block: the same
+ * 6070.11.1 coprocessor registers and TEXT/DATA sizes as t8112. Boot
+ * parameters are copied from t8112 (device 18, type 15, timebase multiplier
+ * 1, restore DATA before the first start). t6000 is the previous generation
+ * and programs the timebase in microseconds instead.
+ *
+ * text_crc is 0 so either qualified 6070 image (t8112 25bfd039 or t6000
+ * 460c7a7c) selects ave_layout_6070_11_1. Segment sizes still reject the
+ * larger M4/M5 images. An unknown TEXT CRC fails probe and is printed.
+ * ave1 is a second instance of this block, not a different variant.
+ */
+static const struct ave_variant ave_t6021 = {
+	.regs = &ave_coproc_6070,
+	.fw_text_size = 0xd0000,
+	.fw_data_size = 0x128000,
+	.boot_device_id = 18,
+	.device_type = 15,
+	.lfs_ref_scale = 1,
+	.text_crc = 0,
+	.boot_arg_value = 0x10000,
+	.timebase_multiplier = 1,
+	.text_link_cell = 0x423c,
+	.mbox_idle = 0x38,
+	.restore_data_first = true,
+
+	.extra0_size = 0x4000,
+	.boot_qualified = true,
+};
+
+/*
  * The M4 Pro (T6040 in the ADT, apple,t6041 in the DT) starts its encoder
  * like the A18 Pro: same coprocessor registers and boot sequence, its own
  * device ID and type. The M4 Max (J575c) runs its first encoder, ADT ave0
@@ -620,6 +650,7 @@ static const struct of_device_id ave_of_match[] = {
 	{ .compatible = "apple,t6041-ave", .data = &ave_t6041 },
 	{ .compatible = "apple,t6050-ave", .data = &ave_t6050 },
 	{ .compatible = "apple,t8112-ave", .data = &ave_t8112 },
+	{ .compatible = "apple,t6021-ave", .data = &ave_t6021 },
 	{ .compatible = "apple,t8140-ave", .data = &ave_t8140 },
 	{ .compatible = "apple,t8142-ave", .data = &ave_t8142 },
 	{}
