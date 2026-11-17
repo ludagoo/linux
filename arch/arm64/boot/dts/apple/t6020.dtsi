@@ -20,10 +20,9 @@
 /delete-node/ &pmgr_south;
 /* ps_venc1_* lives in pmgr_south; the second encoder is M2 Max only. */
 /delete-node/ &ave1;
+/delete-node/ &ave1_dma;
 /delete-node/ &dart_ave1_0;
 /delete-node/ &dart_ave1_1;
-/delete-node/ &dart_ave1_2;
-/delete-node/ &dart_ave1_3;
 /delete-node/ &pmp_report_dispext2;
 /delete-node/ &pmp_report_dispext3;
 /delete-node/ &pmp_report_venc1;
