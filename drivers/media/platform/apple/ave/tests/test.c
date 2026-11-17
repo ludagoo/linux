@@ -65,6 +65,7 @@ static void facts(void)
 	assert(!ave_layout_for_crc(0xffffffff));
 	assert(!ave_layout_for_crc(0x2ce7359e));
 	assert(ave_layout_for_crc(0x69c54454) == &ave_layout_9003_78_0);
+	assert(ave_layout_for_crc(0x0d56db87) == &ave_layout_6070_11_1);
 	assert(ave_fw_check_build(&dev) == -EOPNOTSUPP);
 	dev.text_crc = 0x69c54454;
 	assert(ave_fw_check_build(&dev) == -EOPNOTSUPP);

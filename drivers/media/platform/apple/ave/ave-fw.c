@@ -45,6 +45,7 @@ static const u32 ave_known_text_crc[] = {
 	AVE_FW_TEXT_CRC_T8142_26A428, /* AppleAVE2FW 9013.45.1, macOS 27.0 26A428 / T8142 */
 	0x460c7a7c, /* AppleAVE2FW 6070.11.1 / T6000 */
 	0x25bfd039, /* AppleAVE2FW 6070.11.1 / T8112 */
+	AVE_FW_TEXT_CRC_T6021_6070, /* AppleAVE2FW 6070.11.1 / T6021 H14C */
 };
 
 static int ave_fw_chosen_crc(struct ave_dev *ave, const char *name, u32 *crc)
@@ -60,6 +61,29 @@ static int ave_fw_chosen_crc(struct ave_dev *ave, const char *name, u32 *crc)
 	if (ret)
 		return ret;
 	return kstrtou32(str, 16, crc);
+}
+
+/*
+ * m1n1 stamps aurora,crc32 on each reservation. The two t6021 encoders
+ * share TEXT and have different DATA images, so one /chosen data CRC cannot
+ * name both. /chosen remains the fallback for a handoff that only publishes
+ * one encoder.
+ */
+static int ave_fw_expect_crc(struct ave_dev *ave, unsigned int index,
+			     const char *chosen_name, u32 *crc)
+{
+	struct device_node *np;
+	const char *str;
+	int ret;
+
+	np = of_parse_phandle(ave->dev->of_node, "memory-region", index);
+	if (!np)
+		return -ENOENT;
+	ret = of_property_read_string(np, "aurora,crc32", &str);
+	of_node_put(np);
+	if (!ret)
+		return kstrtou32(str, 16, crc);
+	return ave_fw_chosen_crc(ave, chosen_name, crc);
 }
 
 static int ave_fw_segment(struct ave_dev *ave, unsigned int index,
@@ -83,12 +107,35 @@ static int ave_fw_segment(struct ave_dev *ave, unsigned int index,
 	if (ret)
 		goto out;
 
-	/* iommu-addresses = <&ave iova-hi iova-lo size-hi size-lo> */
+	/*
+	 * iommu-addresses = <&ave iova-hi iova-lo size-hi size-lo>, one tuple
+	 * per encoder. t6021 shares one TEXT reservation between ave0 and ave1.
+	 */
 	prop = of_get_property(np, "iommu-addresses", &len);
-	if (!prop || len != 5 * sizeof(u32) ||
-	    be32_to_cpup(prop) != ave->dev->of_node->phandle) {
+	if (!prop || len <= 0 || len % (5 * (int)sizeof(u32))) {
 		ret = -EINVAL;
 		goto out;
+	}
+	{
+		const __be32 *match = NULL;
+		u32 phandle = ave->dev->of_node->phandle;
+
+		for (int off = 0; off < len; off += 5 * (int)sizeof(u32)) {
+			const __be32 *cell = prop + off / sizeof(u32);
+
+			if (be32_to_cpup(cell) != phandle)
+				continue;
+			if (match) {
+				ret = -EINVAL;
+				goto out;
+			}
+			match = cell;
+		}
+		if (!match) {
+			ret = -EINVAL;
+			goto out;
+		}
+		prop = match;
 	}
 	seg->phys = res.start;
 	seg->size = resource_size(&res);
@@ -292,7 +339,7 @@ int ave_fw_probe(struct ave_dev *ave)
 	ret = ave_fw_crc(&ave->text, &text_crc, NULL);
 	if (ret)
 		return ret;
-	ret = ave_fw_chosen_crc(ave, "aurora,ave-text-crc32", &want);
+	ret = ave_fw_expect_crc(ave, 0, "aurora,ave-text-crc32", &want);
 	if (ret || text_crc != want)
 		return dev_err_probe(dev, -ENODEV,
 				     "firmware text differs from loader CRC\n");
@@ -322,7 +369,7 @@ int ave_fw_probe(struct ave_dev *ave)
 	 * The loader records the DATA checksum before anything runs. If it
 	 * differs, the firmware already ran and there is no clean copy left.
 	 */
-	ret = ave_fw_chosen_crc(ave, "aurora,ave-data-crc32", &want);
+	ret = ave_fw_expect_crc(ave, 1, "aurora,ave-data-crc32", &want);
 	if (ret || data_crc != want) {
 		ret = dev_err_probe(dev, -ENODEV,
 				    "firmware data is not in its boot state\n");
@@ -461,8 +508,12 @@ static int ave_fw_map_extra0(struct ave_dev *ave)
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "extra0");
 	if (!res)
 		res = platform_get_resource(pdev, IORESOURCE_MEM, 3);
-	if (!res || resource_size(res) < ave->variant->extra0_size ||
-	    !IS_ALIGNED(res->start, SZ_16K))
+	/*
+	 * t6000 and t8112 publish a 16 KiB-aligned window. t6021's
+	 * power-control base is not aligned; dma_map_resource covers the
+	 * pages that contain the range and returns the IOVA of the base.
+	 */
+	if (!res || resource_size(res) < ave->variant->extra0_size)
 		return dev_err_probe(
 			ave->dev, -EINVAL,
 			"missing or invalid extra0 register resource\n");
