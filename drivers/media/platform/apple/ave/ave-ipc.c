@@ -244,9 +244,6 @@ int ave_ipc_negotiate(struct ave_dev *ave, const u32 hello[4])
 			hello[0], hello[1], hello[2], hello[3]);
 		return ret;
 	}
-	if (t->scratch_halt)
-		dev_dbg(ave->dev, "hello {%#x, %#x, %#x, %#x}\n", hello[0],
-			hello[1], hello[2], hello[3]);
 	ave->channel_bytes = hello[1];
 
 	if (hello[3]) {
@@ -281,6 +278,8 @@ int ave_ipc_negotiate(struct ave_dev *ave, const u32 hello[4])
 	if (!ave->ipc_fw_base || !IS_ALIGNED(ave->ipc_fw_base, SZ_16K) ||
 	    ave->ipc_fw_base > U64_MAX - ave->ipc.size)
 		return -EPROTO;
+	dev_info(ave->dev, "ipc window %#llx size %#zx\n",
+		 ave->ipc_fw_base, ave->ipc.size);
 
 	memset(ave->ipc.cpu + AVE_IPC_CHANNEL_OFF, 0, ave->channel_bytes);
 	memset(hs, 0, AVE_HS_BYTES);
@@ -314,10 +313,12 @@ int ave_ipc_negotiate(struct ave_dev *ave, const u32 hello[4])
 	    off != AVE_IPC_CHANNEL_OFF ||
 	    (t->boot_config && reply[2] > AVE_HELLO_EXTRA_MAX))
 		return -EPROTO;
+	dev_info(ave->dev, "handshake accepted\n");
 
 	ret = ave_ipc_parse_channels(ave);
 	if (ret)
 		return ret;
+	dev_info(ave->dev, "channels ready\n");
 	bitmap_zero(ave->smalloc_map, AVE_SMALLOC_UNITS);
 	memset(ave->smalloc, 0, sizeof(ave->smalloc));
 
@@ -934,27 +935,29 @@ int ave_ipc_pump(struct ave_dev *ave, unsigned int wait_ms,
 }
 
 /*
- * Dynamic-debug dump of what the host still waits for: commands not yet
+ * What the host still waits for when a command times out: commands not yet
  * acknowledged (by buffer), replies outstanding (by operation), the rings,
- * the mailbox and the last firmware message. Caller holds hw_lock.
+ * the mailbox and the last firmware message. This used to be dynamic debug,
+ * which left a Config timeout indistinguishable from a missing ack. Caller
+ * holds hw_lock.
  */
 void ave_ipc_dump(struct ave_dev *ave, const char *why)
 {
 	const struct ave_reply *r = &ave->last_reply;
 
-	dev_dbg(ave->dev, "%s: unacked %#x (bit 0 Start, 1..%u scalar, %u+ Process)\n",
+	dev_err(ave->dev, "%s: unacked %#x (bit 0 Start, 1..%u scalar, %u+ Process)\n",
 		why, ave->unacked, AVE_IPC_SCALAR_BUFS, AVE_BUF_PROC(0));
 	for (unsigned int op = 1; op < AVE_OP_COUNT; op++)
 		if (ave->want[op])
-			dev_dbg(ave->dev, "%s: %u replies outstanding for operation %u\n",
+			dev_err(ave->dev, "%s: %u replies outstanding for operation %u\n",
 				why, ave->want[op], op);
 	for (unsigned int i = 0; i < ARRAY_SIZE(ave->ring); i++)
-		dev_dbg(ave->dev, "%s: ring %s producer %d consumer %d of %u\n", why,
+		dev_err(ave->dev, "%s: ring %s producer %d consumer %d of %u\n", why,
 			ave->ring[i].name, ave->ring[i].producer,
 			ave->ring[i].consumer, ave->ring[i].slots);
-	dev_dbg(ave->dev, "%s: mailbox status %#x, firmware state %d\n", why,
+	dev_err(ave->dev, "%s: mailbox status %#x, firmware state %d\n", why,
 		readl(ave->mbox + AVE_MBOX_STATUS), ave->fw_state);
-	dev_dbg(ave->dev, "%s: last message op %u client %llu subtype %#x status %#x len %u\n",
+	dev_err(ave->dev, "%s: last message op %u client %llu subtype %#x status %#x len %u\n",
 		why, r->op, r->client, r->subtype, r->raw_status, r->bytes);
 	for (unsigned int i = 0; i < AVE_MAX_SESSIONS; i++) {
 		struct ave_ctx *ctx = ave->sessions[i];
@@ -963,7 +966,7 @@ void ave_ipc_dump(struct ave_dev *ave, const char *why)
 			continue;
 		for (unsigned int s = 0; s < ctx->sess->p.slots; s++)
 			if (ctx->sess->slot[s].busy)
-				dev_dbg(ave->dev,
+				dev_err(ave->dev,
 					"%s: session %u client %u%s slot %u (subtype %#x) unanswered, %u frames sent\n",
 					why, i, ctx->sess->client,
 					ctx->mctf ? " (MCTF)" : "", s,

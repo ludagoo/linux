@@ -40,7 +40,10 @@ Lifecycle-only validation
 -------------------------
 
 Build with CONFIG_DEBUG_FS. On a supported 6070 device, write ``1`` (AVC) or ``2``
-(HEVC) to ``/sys/kernel/debug/apple-ave/lifecycle_test``. This synchronous operation
+(HEVC) to ``/sys/kernel/debug/apple-ave-<device>/lifecycle_test``. Each encoder
+has its own directory, so a second instance is not dropped. On t6021 those
+directories are ``apple-ave-40d100000.video-codec`` and
+``apple-ave-507100000.video-codec``. This synchronous operation
 runs boot, Config, Open, Close and Halt, then requests runtime suspend. It does
 not allocate encoding surfaces or issue Start, Process or uninit for an encoder
 that was never initialized. A second write exercises a cold restart and DATA
