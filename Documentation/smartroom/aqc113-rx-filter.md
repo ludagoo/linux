@@ -84,13 +84,19 @@ ip -d link show end0
 
 1. Unicast ping. From another LAN host, ping the Studio's DHCP address.
    On the Studio, `ping -I end0 -c 3 <gateway>` must get replies.
-2. IPv6 router advertisement. `tcpdump -ni end0 -c 2 icmp6 and ip6[40] == 134`
-   must show an RA within a minute, without `-p` and without promisc.
-   (`tcpdump` itself turns promisc on unless `-p` is set. Use `-p`.)
+2. IPv6 router advertisement. `tcpdump -p -ni end0 -c 2 icmp6 and ip6[40] == 134`
+   must show an RA within a minute. The `-p` flag is required: tcpdump
+   turns promiscuous mode on unless it is set, which hides this bug.
 3. DHCP. `nmcli connection down` / `up` the wired profile, or
    `dhclient -v end0` if NetworkManager is stopped. A lease must arrive
    while PROMISC is off.
 4. Broadcast still works: `arping -I end0 <gateway>` from the Studio.
 
-If it fails, capture `ethtool -d end0` is not required. Note
-`dmesg | grep -i atlantic` and whether `ip -d link` shows PROMISC.
+If it fails, note `dmesg | grep -i atlantic` and whether `ip -d link`
+shows PROMISC. Wi-Fi is the fallback path. Restore the shipping workaround
+only when the test fails, so the wired link is usable again:
+
+```
+nmcli connection modify 'Wired connection 1' 802-3-ethernet.accept-all-mac-addresses 1
+nmcli connection up 'Wired connection 1' ifname end0
+```
