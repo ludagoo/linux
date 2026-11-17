@@ -23,20 +23,32 @@
 int ave_cmd_config(struct ave_dev *ave)
 {
 	int buf = ave_ipc_scalar_buf(ave);
+	u32 len = ave->layout->abi->scalar_bytes[AVE_OP_CONFIG];
 	u8 *cmd;
 	int ret;
 
 	if (buf < 0)
 		return buf;
-	cmd = ave_ipc_cmd(ave, buf,
-			  ave->layout->abi->scalar_bytes[AVE_OP_CONFIG]);
+	cmd = ave_ipc_cmd(ave, buf, len);
 	if (!cmd)
 		return -EBUSY;
 	ave->layout->abi->write_config(ave, cmd);
-	ret = ave_ipc_submit(ave, buf,
-			     ave->layout->abi->scalar_bytes[AVE_OP_CONFIG],
-			     AVE_CMD_GLOBAL_TIMEOUT_US, true);
-	return ret ?: ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
+	ret = ave_ipc_submit(ave, buf, len, AVE_CMD_GLOBAL_TIMEOUT_US, true);
+	if (ret)
+		return ret;
+	/*
+	 * Queued, not acknowledged. Settle waits for the ack and the reply.
+	 * flags are command bytes +0x40 and +0x41. On 6070 that is the
+	 * chip-type byte and the byte the builder always sets.
+	 */
+	dev_info(ave->dev,
+		 "Config submitted: %u bytes extra0 %#llx flags %02x %02x (buf %d)\n",
+		 len, (unsigned long long)ave->extra0_dma,
+		 len > 0x40 ? cmd[0x40] : 0, len > 0x41 ? cmd[0x41] : 0, buf);
+	ret = ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
+	if (!ret)
+		dev_info(ave->dev, "Config answered\n");
+	return ret;
 }
 
 /*
@@ -90,14 +102,19 @@ int ave_cmd_open(struct ave_ctx *ctx)
 	ctx->sess->token = AVE_TOKEN_BASE;
 	ret = ave_cmd_scalar(ctx, AVE_OP_OPEN, AVE_SESSION_ARG0,
 			     ave_session_setup_arg2(ctx));
+	if (!ret)
+		dev_info(ave->dev, "Open submitted\n");
 	if (ave->layout->abi->transport->boot_config) {
 		if (!ret)
 			ctx->sess->fw_open = true;
-		return ret ?: ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
+		ret = ret ?: ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
+	} else {
+		ret = ret ?: ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
+		if (!ret)
+			ctx->sess->fw_open = true;
 	}
-	ret = ret ?: ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
 	if (!ret)
-		ctx->sess->fw_open = true;
+		dev_info(ave->dev, "Open answered\n");
 	return ret;
 }
 
@@ -172,7 +189,11 @@ int ave_cmd_start(struct ave_ctx *ctx)
 			     true);
 	if (ret)
 		return ret;
-	return ave_ipc_settle(ave, AVE_START_WAIT_MS);
+	dev_info(ave->dev, "Start submitted: %zu bytes\n", len);
+	ret = ave_ipc_settle(ave, AVE_START_WAIT_MS);
+	if (!ret)
+		dev_info(ave->dev, "Start answered\n");
+	return ret;
 }
 
 int ave_cmd_process(struct ave_ctx *ctx, unsigned int slot,

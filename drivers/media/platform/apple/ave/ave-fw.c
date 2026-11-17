@@ -877,6 +877,9 @@ static int ave_fw_boot(struct ave_dev *ave)
 		iommu_flush_iotlb_all(domain);
 	ave->data_dirty = true;
 	ave->fw_ever_ran = true;
+	dev_info(ave->dev, "boot: device %u type %u boot_arg %#x\n",
+		 ave->variant->boot_device_id, ave->variant->device_type,
+		 ave->variant->boot_arg_value);
 	writel(1, ave->coproc + ave->variant->regs->keep_mappings);
 	writel(0, ave->coproc + ave->variant->regs->ctrl);
 	writel(ave->variant->boot_arg_value,
@@ -895,6 +898,8 @@ static int ave_fw_boot(struct ave_dev *ave)
 	for (unsigned int i = 0; i < 4; i++)
 		hello[i] = readl(ave->mbox + AVE_MBOX_SCRATCH(i));
 	dma_rmb();
+	dev_info(ave->dev, "hello {%#x, %#x, %#x, %#x}\n",
+		 hello[0], hello[1], hello[2], hello[3]);
 
 	/*
 	 * The reset witness: BOOT_ARG is nonzero while the coprocessor has
