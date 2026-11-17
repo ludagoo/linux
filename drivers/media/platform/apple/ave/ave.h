@@ -178,6 +178,12 @@ enum ave_opcode {
 #define AVE_FW_TEXT_CRC_T6050_26C5035 0xc25b4ddb
 /* The M5 (T8142) build of the same 26A428 firmware (AppleAVE2FW 9013.45.1). */
 #define AVE_FW_TEXT_CRC_T8142_26A428 0x8a3784bd
+/*
+ * M2 Max (T6021 / J475c) AppleAVE2FW_H14C from macOS 13.5 22G74. Same
+ * 6070.11.1 version as T8112, with TEXT 0xf0000 and DATA 0x134000. This is
+ * the TEXT CRC with the link cell at 0x423c still zero.
+ */
+#define AVE_FW_TEXT_CRC_T6021_6070 0x0d56db87
 
 struct ave_ctx;
 
@@ -551,7 +557,7 @@ static inline struct ave_ctx *ave_file_to_ctx(struct file *file)
 	return container_of(file_to_v4l2_fh(file), struct ave_ctx, fh);
 }
 
-extern const struct ave_variant ave_t6000, ave_t6041, ave_t8112;
+extern const struct ave_variant ave_t6000, ave_t6021, ave_t6041, ave_t8112;
 
 /* ave-fw.c */
 u64 ave_fw_vcbar(const struct ave_variant *variant, u64 text_iova);

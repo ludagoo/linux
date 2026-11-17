@@ -1186,6 +1186,8 @@ static void ave_6070_gate(struct kunit *test)
 			    &ave_layout_6070_11_1);
 	KUNIT_EXPECT_PTR_EQ(test, ave_layout_for_crc(0x25bfd039),
 			    &ave_layout_6070_11_1);
+	KUNIT_EXPECT_PTR_EQ(test, ave_layout_for_crc(AVE_FW_TEXT_CRC_T6021_6070),
+			    &ave_layout_6070_11_1);
 	KUNIT_EXPECT_PTR_EQ(test, ave_layout_for_crc(0), NULL);
 	/* H.264 low delay is qualified; a short command buffer is still refused. */
 	KUNIT_EXPECT_TRUE(test, ave_layout_6070_11_1.encode_ready);
@@ -1412,6 +1414,14 @@ static void ave_6070_variants(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, ave_t8112.timebase_multiplier, 1U);
 	KUNIT_EXPECT_EQ(test, ave_t8112.text_crc, 0x25bfd039U);
 	KUNIT_EXPECT_EQ(test, ave_t8112.mbox_idle, 0x38U);
+	KUNIT_EXPECT_EQ(test, ave_t6021.fw_text_size, 0xf0000U);
+	KUNIT_EXPECT_EQ(test, ave_t6021.fw_data_size, 0x134000U);
+	KUNIT_EXPECT_EQ(test, ave_t6021.text_crc, AVE_FW_TEXT_CRC_T6021_6070);
+	KUNIT_EXPECT_EQ(test, ave_t6021.boot_device_id, 20U);
+	KUNIT_EXPECT_EQ(test, ave_t6021.device_type, 17U);
+	KUNIT_EXPECT_EQ(test, ave_t6021.text_link_cell, 0x423cU);
+	KUNIT_EXPECT_EQ(test, ave_t6021.extra0_size, 0x3dfcU);
+	KUNIT_EXPECT_EQ(test, ave_t6021.boot_arg_value, 0x10000U);
 	KUNIT_EXPECT_EQ(test, ave_t6000.regs->ctrl, 0x400044U);
 	KUNIT_EXPECT_EQ(test, ave_t8112.regs->timebase, 0x178000U);
 	KUNIT_EXPECT_GE(test, t->command_bytes, 0x32dc8U);

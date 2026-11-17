@@ -87,32 +87,38 @@ const struct ave_variant ave_t8112 = {
 };
 
 /*
- * M2 Max (t6021) uses the M2 encoder, not the M4/A18 v40 block: the same
- * 6070.11.1 coprocessor registers and TEXT/DATA sizes as t8112. Boot
- * parameters are copied from t8112 (device 18, type 15, timebase multiplier
- * 1, restore DATA before the first start). t6000 is the previous generation
- * and programs the timebase in microseconds instead.
+ * M2 Max (t6021, j475c) runs AppleAVE2FW_H14C, still 6070.11.1, but the
+ * image is larger than t8112's H14G: TEXT 0xf0000, DATA 0x134000. Both
+ * encoders share that TEXT. The identity CRC is TEXT with the link cell at
+ * 0x423c zeroed (0x0d56db87). The same hash of H14G and H13S is the t8112
+ * and t6000 CRC already accepted here, so the cell is the only TEXT patch
+ * iBoot makes. Coprocessor registers, boot argument, timebase and the SVE
+ * idle word are the 6070 block, unchanged.
  *
- * text_crc is 0 so either qualified 6070 image (t8112 25bfd039 or t6000
- * 460c7a7c) selects ave_layout_6070_11_1. Segment sizes still reject the
- * larger M4/M5 images. An unknown TEXT CRC fails probe and is printed.
- * ave1 is a second instance of this block, not a different variant.
+ * AppleAVE2's soc-id table in the 22G74 kernelcache names the chip "t"
+ * plus a decimal id. The t6021 row is device 20 and type 17, the same
+ * columns that are 18/15 for t8112 and 14/11 for t6000. ave1 is a second
+ * instance of this block, not a different variant.
+ *
+ * extra0 is the power-control resource. ave0's window is 0x7c44 bytes at
+ * 0x2902803e0 and ave1's is 0x3dfc bytes at 0x28e680228, so neither is a
+ * 16 KiB page. 0x3dfc is the smaller of the two.
  */
-static const struct ave_variant ave_t6021 = {
+const struct ave_variant ave_t6021 = {
 	.regs = &ave_coproc_6070,
-	.fw_text_size = 0xd0000,
-	.fw_data_size = 0x128000,
-	.boot_device_id = 18,
-	.device_type = 15,
+	.fw_text_size = 0xf0000,
+	.fw_data_size = 0x134000,
+	.boot_device_id = 20,
+	.device_type = 17,
 	.lfs_ref_scale = 1,
-	.text_crc = 0,
+	.text_crc = AVE_FW_TEXT_CRC_T6021_6070,
 	.boot_arg_value = 0x10000,
 	.timebase_multiplier = 1,
 	.text_link_cell = 0x423c,
 	.mbox_idle = 0x38,
 	.restore_data_first = true,
 
-	.extra0_size = 0x4000,
+	.extra0_size = 0x3dfc,
 	.boot_qualified = true,
 };
 

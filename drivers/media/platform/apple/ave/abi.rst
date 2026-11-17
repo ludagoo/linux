@@ -15,7 +15,8 @@ at 1920x1080 with B-frames enabled/disabled, and 3840x2160 with B-frames enabled
 They compare both deterministic synthetic DART addresses and masked images.
 The constant image tables in ave-image.c are unchanged by this refactor.
 
-6070.11.1 is selected only for T6000 TEXT CRC 460c7a7c or T8112 TEXT CRC 25bfd039,
+6070.11.1 is selected for T6000 TEXT CRC 460c7a7c, T8112 TEXT CRC 25bfd039,
+or T6021 TEXT CRC 0d56db87 (AppleAVE2FW_H14C, TEXT 0xf0000, DATA 0x134000),
 with the corresponding SoC identity. Boot, seven-channel discovery, Config,
 Open, Close and scratch-confirmed Halt are implemented from the clean derived
 SPEC-6070-lifecycle.md ledger. Start and ordinary Process writers implement the
@@ -46,10 +47,11 @@ that was never initialized. A second write exercises a cold restart and DATA
 restore. An existing session makes the operation return EBUSY.
 
 The platform must supply the extra-0 register resource as ``extra0`` or register
-resource index 3, with at least 0x24 bytes on T6000 or 0x4000 bytes on T8112.
-The driver uses the translated platform resource address, maps its containing
-16 KiB page through the device DMA API and puts that dynamically allocated IOVA
-in Config. Platform DT/binding changes are separate from this driver change.
+resource index 3, with at least 0x24 bytes on T6000, 0x4000 bytes on T8112, or
+0x3dfc bytes on T6021 (the smaller power-control window). The driver uses the
+translated platform resource address. The DMA API maps the pages covering that
+range, including a base that is not 16 KiB aligned, and Config receives that
+IOVA. Platform DT/binding changes are separate from this driver change.
 No fixed firmware or register IOVA is used as an ordinary DMA allocation.
 
 Before every boot the driver checks the firmware's IOMMU translations. DATA must
