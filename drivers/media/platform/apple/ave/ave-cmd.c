@@ -38,8 +38,8 @@ int ave_cmd_config(struct ave_dev *ave)
 		return ret;
 	/*
 	 * Queued, not acknowledged. Settle waits for the ack and the reply.
-	 * flags are command bytes +0x40 and +0x41. On 6070 that is the
-	 * chip-type byte and the byte the builder always sets.
+	 * flags are command bytes +0x40 and +0x41. On 6070, a set 0x40 skips
+	 * Mcpu construction; 0x41 requests it when 0x40 is clear.
 	 */
 	dev_info(ave->dev,
 		 "Config submitted: %u bytes extra0 %#llx flags %02x %02x (buf %d)\n",

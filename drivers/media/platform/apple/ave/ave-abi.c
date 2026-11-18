@@ -85,6 +85,12 @@ static void ave_config_9003(struct ave_dev *ave, u8 *cmd)
 static void ave_config_6070(struct ave_dev *ave, u8 *cmd)
 {
 	ave_write_global(ave, cmd, AVE_OP_CONFIG);
+	/*
+	 * Byte 0x41 asks for the Mcpu controller when byte 0x40 is clear.
+	 * t6021's H14C image sets byte 0x40 and skips that constructor.
+	 */
+	if (ave->variant && ave->variant->config_direct)
+		cmd[0x40] = 1;
 	cmd[0x41] = 1;
 	put_unaligned_le64(ave->extra0_dma, cmd + 0x48);
 	/* No MCC, host heap, shared area or optional firmware log. */

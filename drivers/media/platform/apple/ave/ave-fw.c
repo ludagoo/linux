@@ -931,8 +931,18 @@ static int ave_fw_boot(struct ave_dev *ave)
 
 	ave->fw_state = AVE_FW_RUNNING;
 	ret = ave_cmd_config(ave);
-	if (ret)
+	if (ret) {
+		/*
+		 * The command was queued. A timeout here is the firmware
+		 * spinning inside ProcessConfig, not a missed hello. Cycling
+		 * VENC power does not make the next hello succeed.
+		 */
+		dev_err(ave->dev,
+			"Config failed (%d); leaving this coprocessor stopped until reboot\n",
+			ret);
+		ave->fw_norestart = true;
 		return ret;
+	}
 
 	dev_dbg(ave->dev, "firmware running, %u/%u ring slots\n",
 		ave->ring[0].slots, ave->ring[1].slots);
@@ -1030,6 +1040,11 @@ int ave_fw_ensure_running(struct ave_dev *ave)
 	int ret;
 
 	lockdep_assert_held(&ave->hw_lock);
+	if (ave->fw_norestart) {
+		dev_err_ratelimited(ave->dev,
+				    "Config wedge: refusing to boot until reboot\n");
+		return -ENODEV;
+	}
 	ret = ave_fw_check_boot(ave);
 	if (ret)
 		return ret;
@@ -1138,6 +1153,8 @@ void ave_fw_halt(struct ave_dev *ave)
 int ave_fw_shutdown(struct ave_dev *ave)
 {
 	lockdep_assert_held(&ave->hw_lock);
+	if (ave->fw_norestart)
+		return -EBUSY;
 	switch (ave->fw_state) {
 	case AVE_FW_RUNNING:
 		ave_fw_halt(ave);
@@ -1177,6 +1194,8 @@ int ave_fw_runtime_suspend(struct ave_dev *ave)
 	int ret;
 
 	lockdep_assert_held(&ave->hw_lock);
+	if (ave->fw_norestart)
+		return -EBUSY;
 	/* 6070 requires scratch-confirmed Halt; never force its power gate. */
 	if (ave->layout && ave->layout->abi->transport->scratch_halt)
 		return ave_fw_shutdown(ave);

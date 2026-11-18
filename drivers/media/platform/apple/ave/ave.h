@@ -249,6 +249,14 @@ struct ave_variant {
 	size_t extra0_size;
 	/* Register sequence and boot/hello configuration have been qualified. */
 	bool boot_qualified;
+	/*
+	 * H14C ProcessConfig: command byte 0x40 nonzero skips
+	 * McpuControllerCreate and the later Mcpu calls, then runs
+	 * ProcessChipReset. Clear (with byte 0x41 set) constructs that
+	 * controller first. Its CIOObject::Spawn is an assert path, and an
+	 * assert spins without a reply. Set on t6021.
+	 */
+	bool config_direct;
 };
 
 /* Start surfaces of an MCTF session, aliases included */
@@ -278,6 +286,12 @@ struct ave_dev {
 	bool data_dirty;
 	/* The last boot reached RUN but the firmware never posted its hello. */
 	bool boot_unanswered;
+	/*
+	 * Config was accepted onto the ring and then wedged the firmware.
+	 * Another boot or VENC power cycle does not recover that core; refuse
+	 * both until the machine reboots.
+	 */
+	bool fw_norestart;
 
 	/* hw_lock protects recovery history and quarantined DMA allocations. */
 	struct ave_recovery_history recovery;
