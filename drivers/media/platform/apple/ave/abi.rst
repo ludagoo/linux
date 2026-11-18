@@ -26,13 +26,17 @@ retained codec-state partitions and per-slot HEVC slice-header tables. The
 session allocator provides distinct backing for every live bank and rejects
 non-16-KiB-aligned IOVAs.
 
-Streaming is enabled for one quality-first NV12 constant-quality session of
-8-bit H.264 (Baseline, Main or High) with low delay: I and P pictures, two
-reconstruction slots that alternate, frame widths in whole macroblocks. B
-pictures, HEVC, Main 10, bit-rate modes, speed priority, standalone LRME and
-Reset remain unavailable; a session asking for B pictures is encoded without
-them, the others are refused. No Priority command is sent. Complete is the
-normal drain barrier; Flush is reserved for cancellation before Stop and Close.
+Streaming is enabled for one 8-bit NV12 session of H.264 (Baseline, Main or
+High) or HEVC Main, frame widths in whole macroblocks. Constant quality is the
+default. CBR and VBR are firmware rate-control ON; CBR padding is done on the
+host, and a bitrate written while streaming is read again on the next Process.
+B-frames default to none, so each frame is answered before the next is
+submitted. The firmware's parameter sets omit VUI timing, and the driver
+rewrites that flag in the output SPS (H.264 time_scale is twice the frame
+rate; HEVC time_scale is the frame rate). Main 10, speed priority, standalone
+LRME and Reset remain unavailable. No Priority command is sent. Complete is
+the normal drain barrier; Flush is reserved for cancellation before Stop and
+Close.
 KUnit checks the 1080p and 4K fields directly from the clean ledgers and embeds
 no Apple command image.
 
@@ -64,11 +68,16 @@ remain persistent. IPC and extra-0 mappings are per-boot resources.
 
 Halt clears scratch0, sends ID 14 without expecting a ring reply, and waits up to
 five seconds for scratch0 0x08042006. Only then does the driver stop the IOP and
-check control readback. Runtime PM performs the power transition; a second boot
-is refused until suspend/resume has intervened. A missing Halt confirmation or
-failed lifecycle leaves the firmware broken and retains DMA mappings, runtime
-power and the module reference. A forced unload or in-place restart is not a
-recovery procedure.
+check control readback. On 6070 a confirmed Stop and Close do not Halt: the CPU
+domain stays powered under the DARTs, and a later boot gets no hello. The
+firmware stays up and the next session is Open and Start only. One runtime PM
+reference taken after the first successful boot keeps autosuspend from Halting
+it. System sleep still Halts. A Halted 6070 core (sleep, or a Close the firmware
+did not confirm) is not booted again in a loop: two attempts, then -EIO, and
+further STREAMON on that open fd returns without touching the core. The flag
+clears when the last fd closes. A missing Halt confirmation or failed lifecycle
+leaves the firmware broken and retains DMA mappings, runtime power and the
+module reference. A forced unload or in-place restart is not a recovery procedure.
 
 Hardware acceptance remains independent of KUnit: check both SoC VCBAR readbacks,
 exact hello, ring dimensions, Config/Open/Close completion IDs and status, Halt
