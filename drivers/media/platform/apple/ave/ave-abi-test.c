@@ -376,6 +376,19 @@ static void ave_6070_images(struct kunit *test)
 	expected[0x41] = 1;
 	put_unaligned_le64(ave->extra0_dma, expected + 0x48);
 	KUNIT_EXPECT_MEMEQ(test, actual, expected, sizeof(actual));
+	{
+		static const struct ave_variant direct = {
+			.config_direct = true,
+		};
+
+		ave->variant = &direct;
+		memset(actual, 0, sizeof(actual));
+		abi->write_config(ave, actual);
+		ave_stamp_command(abi, actual, 3000000, 0x123456);
+		expected[0x40] = 1;
+		KUNIT_EXPECT_MEMEQ(test, actual, expected, sizeof(actual));
+		ave->variant = NULL;
+	}
 	for (unsigned int codec = AVE_CODEC_H264; codec <= AVE_CODEC_HEVC;
 	     codec++) {
 		static const enum ave_opcode ops[] = { AVE_OP_OPEN,

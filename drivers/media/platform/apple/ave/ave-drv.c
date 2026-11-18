@@ -121,6 +121,7 @@ const struct ave_variant ave_t6021 = {
 
 	.extra0_size = 0x3dfc,
 	.boot_qualified = true,
+	.config_direct = true,
 };
 
 /*
