@@ -31,10 +31,13 @@ High) or HEVC Main, frame widths in whole macroblocks. Constant quality is the
 default. CBR and VBR are firmware rate-control ON; CBR padding is done on the
 host, and a bitrate written while streaming is read again on the next Process.
 B-frames default to none, so each frame is answered before the next is
-submitted. The firmware's parameter sets omit VUI timing, and the driver
-rewrites that flag in the output SPS (H.264 time_scale is twice the frame
-rate; HEVC time_scale is the frame rate). Main 10, speed priority, standalone
-LRME and Reset remain unavailable. No Priority command is sent. Complete is
+submitted. The firmware's parameter sets omit VUI timing. When a VUI is
+already present the driver sets the timing flag in the output SPS. When
+B-frames are off and the VUI flag itself is clear, the driver inserts a
+minimal VUI (H.264 time_scale is twice the frame rate; HEVC time_scale is
+the frame rate, and sps_extension_present_flag stays clear). Main 10, speed
+priority, standalone LRME and Reset remain unavailable. No Priority command
+is sent. Complete is
 the normal drain barrier; Flush is reserved for cancellation before Stop and
 Close.
 KUnit checks the 1080p and 4K fields directly from the clean ledgers and embeds

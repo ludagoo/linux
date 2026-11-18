@@ -642,6 +642,7 @@ const struct ave_fw_layout ave_layout_6070_11_1 = {
 			.h264_max_mvs_per_2mb = 0x70,
 			.h264_adapt_b = 0x7d,
 			.h264_pixel_packing = 0xfce8,
+			/* Same word as rc_310. Non-CQ leaves the rc value. */
 			.h264_transform_mode = 0xfcec,
 			.h264_skip_mode = 0xfcf0,
 			.h264_input_bit_depth = 0xfd20,

@@ -194,7 +194,8 @@ int ave_cmd_start(struct ave_ctx *ctx)
 			     true);
 	if (ret)
 		return ret;
-	dev_info(ave->dev, "Start submitted: %zu bytes\n", len);
+	dev_info(ave->dev, "Start submitted: %zu bytes rc %u bitrate %u\n",
+		 len, p->rc_mode, p->bitrate);
 	ret = ave_ipc_settle(ave, AVE_START_WAIT_MS);
 	if (!ret)
 		dev_info(ave->dev, "Start answered\n");

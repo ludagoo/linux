@@ -734,6 +734,16 @@ static void ave_6070_start_process_fields(struct kunit *test)
 						get_unaligned_le32(start + sl->h264_max_refs), 1U);
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le32(start + sl->h264_poc_type), 2U);
+				sess->p.rc_mode = AVE_RC_CBR;
+				memset(start, 0, 0x32dc8);
+				KUNIT_ASSERT_EQ(test,
+						ave_build_start(ctx, start, start_len), 0);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_310), 30U);
+				sess->p.rc_mode = AVE_RC_CQ;
+				memset(start, 0, 0x32dc8);
+				KUNIT_ASSERT_EQ(test,
+						ave_build_start(ctx, start, start_len), 0);
 				KUNIT_EXPECT_EQ(test, start[sl->ref_compression], 1U);
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le64(start + sl->recon.address),
