@@ -176,8 +176,12 @@ static int ave_sess_params(struct ave_ctx *ctx, struct ave_params *p)
 				    ctx->timeperframe.denominator);
 	p->fps_num = p->fps_int;
 	p->fps_den = 1;
-	/* Start samples this once. A later S_PARM must not move it. */
+	/* Start samples this once. A later S_PARM must not move it.
+	 * PTS and the firmware fps words stay on this clock so a
+	 * mid-stream rate change cannot run the timestamps backwards.
+	 */
 	p->fps_base = p->fps_int;
+	p->fps_now = p->fps_int;
 
 	if (p->codec == AVE_CODEC_H264) {
 		switch (ctx->h264_profile) {
@@ -1897,7 +1901,14 @@ static size_t ave_sess_cbr_fill(struct ave_ctx *ctx, u8 *out, size_t len, size_t
 	bitrate = READ_ONCE(ctx->bitrate);
 	if (!bitrate)
 		bitrate = p->bitrate;
-	budget = div_u64((u64)bitrate * p->fps_den, 8ULL * p->fps_num);
+	{
+		u32 now = READ_ONCE(p->fps_now);
+
+		if (!now)
+			now = p->fps_num;
+		/* Pad against the requested rate, not the Start clock. */
+		budget = div_u64((u64)bitrate * p->fps_den, 8ULL * now);
+	}
 	vbv = bitrate / 16;
 	/*
 	 * A bitrate drop used to emit the previous VBV as one filler NAL

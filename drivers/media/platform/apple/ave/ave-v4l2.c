@@ -398,9 +398,11 @@ static bool ave_parm_ok(u32 type)
 }
 
 /*
- * Process repeats fps_int and the fps float on every frame. The rate
- * controller does not read those words after Start; ave_build_process
- * scales the live bitrate by fps_base/fps_now so bits per frame follow.
+ * The rate controller does not read the fps words after Start, and the
+ * picture timestamps are frame_index / fps_at_Start. Changing those words
+ * mid-stream runs PTS backwards when the rate goes back up and HEVC loses
+ * its references. Remember the requested fps; ave_build_process folds it
+ * into the live bitrate instead.
  */
 static void ave_live_fps(struct ave_ctx *ctx)
 {
@@ -411,9 +413,7 @@ static void ave_live_fps(struct ave_ctx *ctx)
 		return;
 	fps = ave_fps_reduce(ctx->timeperframe.numerator,
 			     ctx->timeperframe.denominator);
-	WRITE_ONCE(sess->p.fps_num, fps);
-	WRITE_ONCE(sess->p.fps_den, 1);
-	WRITE_ONCE(sess->p.fps_int, fps);
+	WRITE_ONCE(sess->p.fps_now, fps);
 }
 
 /*

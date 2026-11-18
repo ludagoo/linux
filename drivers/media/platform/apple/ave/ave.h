@@ -466,8 +466,9 @@ struct ave_params {
 	u32 sample_bytes; /* 1 for NV12, 2 for P010 */
 	u32 mbs; /* 16x16 macroblocks */
 	u32 fps_num, fps_den; /* frames per second = num / den */
-	u32 fps_int; /* the same, rounded; S_PARM updates this live */
+	u32 fps_int; /* the same, rounded; sampled at Start */
 	u32 fps_base; /* fps Start stored in the rate controller */
+	u32 fps_now; /* latest S_PARM; 0 means use fps_int */
 	u32 slots;
 	u32 refs; /* max_num_ref_frames + 1 */
 	bool bframes;
