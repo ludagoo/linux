@@ -86,11 +86,12 @@ static void ave_config_6070(struct ave_dev *ave, u8 *cmd)
 {
 	ave_write_global(ave, cmd, AVE_OP_CONFIG);
 	/*
-	 * Byte 0x41 asks for the Mcpu controller when byte 0x40 is clear.
-	 * t6021's H14C image sets byte 0x40 and skips that constructor.
+	 * Byte 0x41 asks H14C to construct CAVEPipeMcpuController. Byte 0x40,
+	 * when set, skips that constructor. A successful create falls through
+	 * into AddSharedMemory, so leave 0x40 clear and supply the shared
+	 * area below. A NULL create asserts (hMcpuCtrl != NULL) and Config
+	 * never replies.
 	 */
-	if (ave->variant && ave->variant->config_direct)
-		cmd[0x40] = 1;
 	cmd[0x41] = 1;
 	put_unaligned_le64(ave->extra0_dma, cmd + 0x48);
 	/*
