@@ -173,6 +173,8 @@ struct ave_start_layout {
 	u32 rc_param_avg_fps;
 	u32 rc_param_fps;
 	u32 rc_param_flag;
+	/* 6070 H.264 command word copied to controller+0xa7c. Zero elsewhere. */
+	u32 verbose_params;
 	u32 size_class;
 	u32 coded_w;
 	u32 coded_h;

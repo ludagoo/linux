@@ -48,6 +48,12 @@ struct ave_mctf_layout;
 #define AVE_6070_RC_OFF 0
 #define AVE_6070_RC_ON 1
 #define AVE_6070_RC_FIXQP 2
+/*
+ * InitEncodingParameters copies command+0xfc78 onto controller+0xa7c.
+ * Bit 1 is the SPS/PPS log that already runs. Bit 4 is the init-params
+ * log, which prints the rate-control flag the same block stored.
+ */
+#define AVE_6070_VERBOSE_PROBE 0x12
 
 #define AVE_MAX_SLOTS 7
 /* Sessions one firmware boot serves at once (macOS was seen running two). */

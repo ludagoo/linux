@@ -799,14 +799,11 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 	ave_start_put32(cmd, l->bitrate,
 			cq && fw->kind == AVE_LAYOUT_6070 ? 0 : p->bitrate);
 	/*
-	 * 6070 non-CQ overwrites the neighbour bank. That bank is pRCParams:
-	 * CAVCController::InitEncodingParameters and the bpp helper read
-	 * ui32Bitrate at +0, ui32ExpectedFrameRate at +0x1c, and ui32RCFlag
-	 * at +0x20. Flag 0 skips CRateControl::Init, so AVC was controlling
-	 * from the low half of a DMA pointer. HEVC copies command+0xff30
-	 * into its picture slot and skips Init while command+0xfec4 is 0;
-	 * flag 1 would publish udiv(bitrate, 0) as the struct bitrate, so
-	 * the flag stays 0. CQ keeps the pointers. An idr period of 1
+	 * 6070 non-CQ overwrites the neighbour bank with the scalars
+	 * InitEncodingParameters reads. Measured on sr12: those words
+	 * land in the command and the bitstream does not move. HEVC
+	 * leaves ui32RCFlag 0. command+0xfec4 stays 0; it is also a
+	 * divisor. CQ keeps the neighbour pointers. An idr period of 1
 	 * asserts, and a zero expected frame rate asserts.
 	 */
 	if (fw->kind == AVE_LAYOUT_6070 && !cq && l->rc_param_bitrate) {
@@ -828,6 +825,14 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 		ave_put32(cmd, l->rc_param_fps, fps);
 		if (!hevc)
 			ave_put32(cmd, l->rc_param_flag, AVE_6070_RC_ON);
+		/*
+		 * Probe only. The H.264 init copies this word to
+		 * controller+0xa7c in the same straight-line block as
+		 * ui32RCFlag. 0x12 asks for the init-params log and
+		 * keeps the SPS log. HEVC's named dump is separate.
+		 */
+		if (!hevc && l->verbose_params)
+			ave_put32(cmd, l->verbose_params, AVE_6070_VERBOSE_PROBE);
 	}
 	for (unsigned int i = 0; i < (unsigned int)(l->init_qp_words ?: 3); i++)
 		ave_put32(cmd, (l->init_qp + 4 * i),
