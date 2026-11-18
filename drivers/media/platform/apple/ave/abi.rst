@@ -37,10 +37,13 @@ fields directly from the clean ledgers and embeds no Apple command image.
 
 T6021 differs in these points. Config carries a 64 KiB shared area; without one
 the firmware does not answer Config. Each encoder takes two sessions. H.264 P
-pictures are kept as references and the inter mode decision is weighted. These
-T6021 settings were found by disassembling its firmware image and the macOS
-driver's device table, and checked on hardware; they are not from the ledgers
-above.
+pictures are kept as references and the inter mode decision is weighted. CBR and
+VBR are offered: both are firmware rate control on, the frame rate is rounded to
+an integer, and a frame rate or bit rate set while streaming scales the bit rate
+of the next Process. The firmware's coded rate stays under a CBR target; the
+host pads to it with filler data. These T6021 settings were found by
+disassembling its firmware image and the macOS driver's device table, and
+checked on hardware; they are not from the ledgers above.
 
 Lifecycle-only validation
 -------------------------

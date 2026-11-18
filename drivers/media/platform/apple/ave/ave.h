@@ -40,6 +40,11 @@ struct ave_mctf_layout;
 #define AVE_RC_CBR 2
 #define AVE_RC_CQ 3
 #define AVE_RC_VBR 4
+/*
+ * The 6070 firmware logs its modes as "0: AVE_RC_OFF, 1: AVE_RC_ON,
+ * 2: AVE_RC_FIXQP". CBR and VBR are both ON there; 2 is constant QP.
+ */
+#define AVE_6070_RC_ON 1
 
 #define AVE_MAX_SLOTS 7
 /* Sessions one firmware boot serves at once (macOS was seen running two). */
@@ -259,6 +264,8 @@ struct ave_variant {
 	 */
 	/* H.264 P pictures are references; inter decisions are weighted. */
 	bool h264_inter;
+	/* CBR and VBR run the firmware rate controller. */
+	bool rate_control;
 };
 
 /* Start surfaces of an MCTF session, aliases included */
@@ -400,6 +407,7 @@ struct ave_params {
 	u32 fps_int; /* the same, rounded */
 	/* The variant's 6070 encode settings, see struct ave_variant. */
 	bool h264_inter;
+	bool rate_control;
 	u32 slots;
 	u32 refs; /* max_num_ref_frames + 1 */
 	bool bframes;
@@ -535,6 +543,11 @@ struct ave_ctx {
 
 	u32 bitrate_mode;
 	u32 quality; /* V4L2 constant quality, 0..100 */
+	/*
+	 * Frame rate from the last S_PARM, rounded, with rate_control. It is
+	 * kept here because the worker frees the session without vdev_lock.
+	 */
+	u32 fps_now;
 	u32 bitrate;
 	u32 bitrate_peak;
 	u32 gop_size;

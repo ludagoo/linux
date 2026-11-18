@@ -406,6 +406,13 @@ static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 		*t = (struct v4l2_fract){ 1, 1 };
 	ctx->timeperframe = *t;
 	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
+	/*
+	 * The firmware keeps the frame rate from Start. A rate set while
+	 * streaming scales the bit rate each Process asks for instead.
+	 */
+	if (ctx->ave->variant->rate_control)
+		WRITE_ONCE(ctx->fps_now,
+			   max(DIV_ROUND_CLOSEST(t->denominator, t->numerator), 1U));
 	return 0;
 }
 
@@ -579,8 +586,16 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 	 * The 6070 firmware path (M1 Pro/Max, M2) is qualified for constant
 	 * quality only: offer just that mode, so a client that keeps the
 	 * defaults (GStreamer, FFmpeg) gets a session instead of a refusal.
+	 * A variant with rate_control also offers CBR and VBR.
 	 */
-	if (ctx->ave->layout && ctx->ave->layout->kind == AVE_LAYOUT_6070)
+	if (ctx->ave->variant->rate_control)
+		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
+				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ,
+				       ~(BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_VBR) |
+					 BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CBR) |
+					 BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CQ)),
+				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ);
+	else if (ctx->ave->layout && ctx->ave->layout->kind == AVE_LAYOUT_6070)
 		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
 				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ,
 				       ~BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CQ),
