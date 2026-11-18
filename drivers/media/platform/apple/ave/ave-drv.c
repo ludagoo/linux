@@ -112,6 +112,7 @@ const struct ave_variant ave_t6021 = {
 	.boot_qualified = true,
 	.config_shared = true,
 	.max_sessions = 2,
+	.h264_inter = true,
 };
 
 /*

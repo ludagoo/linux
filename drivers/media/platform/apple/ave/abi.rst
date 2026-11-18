@@ -36,7 +36,8 @@ reserved for cancellation before Stop and Close. KUnit checks the 1080p and 4K
 fields directly from the clean ledgers and embeds no Apple command image.
 
 T6021 differs in these points. Config carries a 64 KiB shared area; without one
-the firmware does not answer Config. Each encoder takes two sessions. These
+the firmware does not answer Config. Each encoder takes two sessions. H.264 P
+pictures are kept as references and the inter mode decision is weighted. These
 T6021 settings were found by disassembling its firmware image and the macOS
 driver's device table, and checked on hardware; they are not from the ledgers
 above.

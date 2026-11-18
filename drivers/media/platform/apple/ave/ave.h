@@ -252,6 +252,13 @@ struct ave_variant {
 	bool config_shared;
 	/* Sessions one firmware boot serves; 0 takes the layout's count. */
 	u8 max_sessions;
+	/*
+	 * 6070 encode settings measured on T6021 only. T6000 and T8112 leave
+	 * them clear and keep the Start and Process bytes they were qualified
+	 * with.
+	 */
+	/* H.264 P pictures are references; inter decisions are weighted. */
+	bool h264_inter;
 };
 
 /* Start surfaces of an MCTF session, aliases included */
@@ -391,6 +398,8 @@ struct ave_params {
 	u32 mbs; /* 16x16 macroblocks */
 	u32 fps_num, fps_den; /* frames per second = num / den */
 	u32 fps_int; /* the same, rounded */
+	/* The variant's 6070 encode settings, see struct ave_variant. */
+	bool h264_inter;
 	u32 slots;
 	u32 refs; /* max_num_ref_frames + 1 */
 	bool bframes;

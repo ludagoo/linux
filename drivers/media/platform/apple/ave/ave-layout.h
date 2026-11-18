@@ -208,6 +208,10 @@ struct ave_start_layout {
 	u32 h264_pixel_packing;
 	u32 h264_transform_mode;
 	u32 h264_skip_mode;
+	/* H.264 motion lambdas. Zero leaves inter mode decision unweighted. */
+	u32 h264_me_fullpel_lambda;
+	u32 h264_md_inter_lambda;
+	u32 h264_md_intra_lambda;
 	u32 h264_input_bit_depth;
 	u32 h264_parameter_set_count;
 	u32 h264_slice_map_count;
