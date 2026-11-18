@@ -484,7 +484,8 @@ int ave_ipc_serve_smalloc(struct ave_dev *ave)
 /*
  * Read the firmware's log lines from the TERMINAL ring. The firmware writes a
  * line only into a slot whose bit 0 is set and clears it; the host gives the
- * slot back by setting it again. Lines go to the debug log.
+ * slot back by setting it again. Lines are printed: an assert is the
+ * evidence for a refused Start, and a quiet ring stays quiet.
  */
 void ave_ipc_drain_log(struct ave_dev *ave)
 {
@@ -510,10 +511,10 @@ void ave_ipc_drain_log(struct ave_dev *ave)
 			while (len && (line[len - 1] == '\n' ||
 				       line[len - 1] == '\r'))
 				line[--len] = 0;
-			dev_dbg(ave->dev, "fw: %s\n", line);
+			dev_info(ave->dev, "fw: %s\n", line);
 		} else if (addr) {
-			dev_dbg(ave->dev, "fw: line at %#llx (%u bytes) outside the IPC window\n",
-				addr, len);
+			dev_info(ave->dev, "fw: line at %#llx (%u bytes) outside the IPC window\n",
+				 addr, len);
 		}
 		WRITE_ONCE(slot[0], cpu_to_le64(AVE_LOG_SLOT_FREE));
 		r->consumer = (r->consumer + 1) % r->slots;

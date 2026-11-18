@@ -798,6 +798,37 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 	ave_start_put32(cmd, l->rc_mode, rc_mode);
 	ave_start_put32(cmd, l->bitrate,
 			cq && fw->kind == AVE_LAYOUT_6070 ? 0 : p->bitrate);
+	/*
+	 * 6070 non-CQ overwrites the neighbour bank. That bank is pRCParams:
+	 * CAVCController::InitEncodingParameters and the bpp helper read
+	 * ui32Bitrate at +0, ui32ExpectedFrameRate at +0x1c, and ui32RCFlag
+	 * at +0x20. Flag 0 skips CRateControl::Init, so AVC was controlling
+	 * from the low half of a DMA pointer. HEVC copies command+0xff30
+	 * into its picture slot and skips Init while command+0xfec4 is 0;
+	 * flag 1 would publish udiv(bitrate, 0) as the struct bitrate, so
+	 * the flag stays 0. CQ keeps the pointers. An idr period of 1
+	 * asserts, and a zero expected frame rate asserts.
+	 */
+	if (fw->kind == AVE_LAYOUT_6070 && !cq && l->rc_param_bitrate) {
+		u32 fps = p->fps_int;
+		u32 idr = p->gop == 1 ? 0 : p->gop;
+
+		if (!fps)
+			fps = p->fps_den ? p->fps_num / p->fps_den : 1;
+		if (!fps)
+			fps = 1;
+		ave_put32(cmd, l->rc_param_bitrate, p->bitrate);
+		ave_put32(cmd, l->rc_param_idr, idr);
+		/* Unnamed gap. These bytes must not stay neighbour pointers. */
+		ave_put32(cmd, l->rc_param_bitrate + 8, 0);
+		ave_put32(cmd, l->rc_param_bitrate + 12, 0);
+		ave_put32(cmd, l->rc_param_reorder, p->bframes ? 1 : 0);
+		ave_put32(cmd, l->rc_param_frames, 0);
+		ave_put32(cmd, l->rc_param_avg_fps, fps);
+		ave_put32(cmd, l->rc_param_fps, fps);
+		if (!hevc)
+			ave_put32(cmd, l->rc_param_flag, AVE_6070_RC_ON);
+	}
 	for (unsigned int i = 0; i < (unsigned int)(l->init_qp_words ?: 3); i++)
 		ave_put32(cmd, (l->init_qp + 4 * i),
 			  cq ? p->initial_qp : AVE_START_INIT_QP_VALUE);
