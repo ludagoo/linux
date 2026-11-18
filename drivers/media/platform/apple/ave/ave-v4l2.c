@@ -416,9 +416,10 @@ static void ave_live_fps(struct ave_ctx *ctx)
 }
 
 /*
- * The firmware SPS already uses the lowest level that fits. Raise the
- * control to that when the client left it lower, so G_CTRL matches the
- * stream. A higher request stays. Not called from s_ctrl.
+ * Publish the lowest HEVC level that fits the current picture. The
+ * default format is 1080p, so a later smaller S_FMT has to lower the
+ * control or a 720p session stays at level 4. An explicit request that
+ * is above the picture stays. Not called from s_ctrl.
  */
 static void ave_publish_hevc_level(struct ave_ctx *ctx)
 {
@@ -428,8 +429,11 @@ static void ave_publish_hevc_level(struct ave_ctx *ctx)
 		return;
 	min_idx = ave_min_hevc_level_index(ctx);
 	cur = v4l2_ctrl_g_ctrl(ctx->hevc_level_ctrl);
-	if (cur < min_idx)
+	if (!ctx->hevc_level_auto_valid || cur == ctx->hevc_level_auto ||
+	    cur < min_idx)
 		v4l2_ctrl_s_ctrl(ctx->hevc_level_ctrl, min_idx);
+	ctx->hevc_level_auto = min_idx;
+	ctx->hevc_level_auto_valid = true;
 }
 
 static int ave_g_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
