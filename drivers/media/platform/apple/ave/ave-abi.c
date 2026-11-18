@@ -93,7 +93,16 @@ static void ave_config_6070(struct ave_dev *ave, u8 *cmd)
 		cmd[0x40] = 1;
 	cmd[0x41] = 1;
 	put_unaligned_le64(ave->extra0_dma, cmd + 0x48);
-	/* No MCC, host heap, shared area or optional firmware log. */
+	/*
+	 * Pointer at +0x60, byte size at +0x68. Both must be 16 KiB aligned
+	 * and the size must be non-zero, or H14C AddSharedMemory spins
+	 * (PlatformIOPIPCManager.cpp:255) and Config never replies. t8112
+	 * keeps these zero: its manager returns before the check.
+	 */
+	if (ave->config_shared.cpu) {
+		put_unaligned_le64(ave->config_shared.dma, cmd + 0x60);
+		put_unaligned_le32(ave->config_shared.size, cmd + 0x68);
+	}
 }
 
 static int ave_reply_9003(const struct ave_fw_abi *abi, const u8 *msg, u32 len,
