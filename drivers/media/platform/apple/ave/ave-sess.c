@@ -103,6 +103,27 @@ static int ave_pick_level(const struct ave_params *p, u32 requested)
 	return -EINVAL;
 }
 
+/* Menu index of the lowest HEVC level that fits the current picture. */
+int ave_min_hevc_level_index(struct ave_ctx *ctx)
+{
+	struct ave_params p = { };
+	int level;
+
+	p.codec = AVE_CODEC_HEVC;
+	p.width = ctx->src_fmt.width;
+	p.height = ctx->src_fmt.height;
+	p.cw = ALIGN(p.width, 16);
+	p.ch = ALIGN(p.height, 16);
+	p.mbs = (p.cw / 16) * (p.ch / 16);
+	p.fps_num = ctx->timeperframe.denominator ?: 30;
+	p.fps_den = ctx->timeperframe.numerator ?: 1;
+	p.bitrate = READ_ONCE(ctx->bitrate);
+	if (!p.bitrate)
+		p.bitrate = 4000000;
+	level = ave_pick_level(&p, 0);
+	return level < 1 ? 0 : level - 1;
+}
+
 /*
  * Constant quality: the QP macOS 27.0 encodes with for VideoToolbox quality
  * q = index / 100 (read from the slice QPs of its own H.264 and HEVC output on
@@ -1862,6 +1883,15 @@ static size_t ave_sess_cbr_fill(struct ave_ctx *ctx, u8 *out, size_t len, size_t
 		bitrate = p->bitrate;
 	budget = div_u64((u64)bitrate * p->fps_den, 8ULL * p->fps_num);
 	vbv = bitrate / 16;
+	/*
+	 * A bitrate drop used to emit the previous VBV as one filler NAL
+	 * (127083 bytes on a 2.5 -> 0.5 Mbit/s step). WebRTC drops the target
+	 * because the link is congested, so that spike goes the wrong way.
+	 * Keep at most the new buffer and discard the rest. Once surplus sits
+	 * at the VBV, a constant target still pads a single frame of budget.
+	 */
+	if (sess->cbr_surplus > vbv)
+		sess->cbr_surplus = vbv;
 	if (fw_filler && !sess->fw_fills) {
 		sess->fw_fills = true;
 		dev_dbg(ctx->ave->dev, "CBR: the firmware writes filler data\n");

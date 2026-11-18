@@ -7,6 +7,7 @@
 #include <linux/dma-buf.h>
 #include <linux/refcount.h>
 #include <linux/slab.h>
+#include <linux/uaccess.h>
 
 #include <media/videobuf2-dma-contig.h>
 
@@ -24,6 +25,9 @@ struct ave_vb2_mem {
 	struct dma_buf *dbuf;
 	struct device *dev;
 	bool mapped;
+	bool userptr;
+	unsigned long user_vaddr;
+	unsigned long user_size;
 };
 
 struct ave_vb2_mem *ave_vb2_get(struct vb2_buffer *vb)
@@ -155,6 +159,45 @@ static void ave_vb2_prepare(void *buf_priv)
 	vb2_dma_contig_memops.prepare(mem->priv);
 }
 
+/*
+ * Chromium's desktop V4L2 encoder queues NV12 in shared memory. Mesa GBM on
+ * this SoC will not allocate NV12, so the pages are not a dmabuf. Copy them
+ * into the DMA buffer vb2 already hands the firmware. The copy runs from
+ * ave_buf_prepare, which vb2 calls before the cache sync in prepare().
+ */
+static void *ave_vb2_get_userptr(struct vb2_buffer *vb, struct device *dev,
+				 unsigned long vaddr, unsigned long size)
+{
+	struct ave_vb2_mem *mem = ave_vb2_alloc(vb, dev, size);
+
+	if (IS_ERR(mem))
+		return mem;
+	if (!vb2_dma_contig_memops.vaddr(vb, mem->priv)) {
+		ave_vb2_put(mem);
+		return ERR_PTR(-EINVAL);
+	}
+	mem->userptr = true;
+	mem->user_vaddr = vaddr;
+	mem->user_size = size;
+	return mem;
+}
+
+int ave_vb2_sync_userptr(struct vb2_buffer *vb)
+{
+	struct ave_vb2_mem *mem = vb->planes[0].mem_priv;
+	void *dst;
+
+	if (!mem || !mem->userptr)
+		return 0;
+	dst = vb2_dma_contig_memops.vaddr(vb, mem->priv);
+	if (!dst)
+		return -EINVAL;
+	if (copy_from_user(dst, (const void __user *)mem->user_vaddr,
+			   mem->user_size))
+		return -EFAULT;
+	return 0;
+}
+
 static void ave_vb2_finish(void *buf_priv)
 {
 	struct ave_vb2_mem *mem = buf_priv;
@@ -162,10 +205,12 @@ static void ave_vb2_finish(void *buf_priv)
 	vb2_dma_contig_memops.finish(mem->priv);
 }
 
-/* OUTPUT supports MMAP and DMABUF; CAPTURE never goes to the firmware. */
+/* OUTPUT supports MMAP, DMABUF, and a copied USERPTR. CAPTURE does not. */
 const struct vb2_mem_ops ave_vb2_memops = {
 	.alloc = ave_vb2_alloc,
 	.put = ave_vb2_put,
+	.get_userptr = ave_vb2_get_userptr,
+	.put_userptr = ave_vb2_put,
 	.get_dmabuf = ave_vb2_export,
 	.cookie = ave_vb2_cookie,
 	.vaddr = ave_vb2_vaddr,

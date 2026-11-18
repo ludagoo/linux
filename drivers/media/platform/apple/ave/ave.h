@@ -569,6 +569,7 @@ struct ave_ctx {
 	struct ave_dev *ave;
 	struct v4l2_ctrl_handler hdl;
 	struct v4l2_ctrl *hevc_profile_ctrl;
+	struct v4l2_ctrl *hevc_level_ctrl;
 	bool hevc_profile_auto; /* Main 10 was set by S_FMT, not the client */
 	struct v4l2_pix_format_mplane src_fmt;
 	struct v4l2_pix_format_mplane dst_fmt;
@@ -578,6 +579,14 @@ struct ave_ctx {
 
 	u32 bitrate_mode;
 	u32 quality; /* V4L2 constant quality, 0..100 */
+	/*
+	 * Set by s_ctrl once ctx->quality is published. Process reads it with
+	 * smp_load_acquire so a constant-quality frame uses the latest value.
+	 * Tests that poke sess->p.initial_qp directly leave this clear.
+	 */
+	unsigned int quality_set;
+	/* Accepted for clients that require it. The session mode stays bitrate_mode. */
+	bool frame_rc;
 	u32 bitrate;
 	u32 bitrate_peak;
 	u32 gop_size;
@@ -693,12 +702,14 @@ int ave_cmd_close(struct ave_ctx *ctx);
 extern const struct vb2_mem_ops ave_vb2_memops;
 struct ave_vb2_mem *ave_vb2_get(struct vb2_buffer *vb);
 void ave_vb2_put(void *buf_priv);
+int ave_vb2_sync_userptr(struct vb2_buffer *vb);
 
 /* ave-sess.c */
 u32 ave_cq_initial_qp(u32 quality);
 int ave_sess_decode_result(const struct ave_fw_layout *fw, enum ave_codec codec,
 			   const u8 *meta, size_t meta_bytes,
 			   struct ave_frame_result *result);
+int ave_min_hevc_level_index(struct ave_ctx *ctx);
 struct ave_session *ave_sess_create(struct ave_ctx *ctx);
 void ave_sess_destroy(struct ave_ctx *ctx);
 void ave_sess_reap(struct ave_dev *ave);

@@ -31,8 +31,21 @@ struct vb2_mem_ops {
 	void *(*attach_dmabuf)(struct vb2_buffer *vb, struct device *dev,
 			       struct dma_buf *dbuf, unsigned long size);
 	void (*detach_dmabuf)(void *priv);
+	void *(*get_userptr)(struct vb2_buffer *vb, struct device *dev,
+			     unsigned long vaddr, unsigned long size);
+	void (*put_userptr)(void *priv);
 	unsigned int (*num_users)(void *priv);
 };
+#ifndef __user
+#define __user
+#endif
+static unsigned long copy_from_user(void *to, const void *from, unsigned long n)
+{
+	(void)to;
+	(void)from;
+	(void)n;
+	return 0;
+}
 static void get_dma_buf(struct dma_buf *b)
 {
 	assert(b->refs);

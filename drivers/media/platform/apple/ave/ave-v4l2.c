@@ -279,6 +279,8 @@ static int ave_try_fmt_out(struct file *file, void *priv, struct v4l2_format *f)
  * that S_FMT chose; one the client set stays and is refused at STREAMON,
  * as is Main set after S_FMT on P010.
  */
+static void ave_publish_hevc_level(struct ave_ctx *ctx);
+
 static void ave_sync_hevc_profile(struct ave_ctx *ctx)
 {
 	/* Only HEVC takes P010, so with H.264 this only undoes an automatic Main 10. */
@@ -323,6 +325,7 @@ static int ave_s_fmt_cap(struct file *file, void *priv, struct v4l2_format *f)
 	if (!raw_ok)
 		ave_fill_raw(ctx->ave, &ctx->src_fmt, pix->pixelformat);
 	ave_sync_hevc_profile(ctx);
+	ave_publish_hevc_level(ctx);
 	return 0;
 }
 
@@ -349,6 +352,7 @@ static int ave_s_fmt_out(struct file *file, void *priv, struct v4l2_format *f)
 	ctx->dst_fmt.ycbcr_enc = pix->ycbcr_enc;
 	ctx->dst_fmt.quantization = pix->quantization;
 	ave_fill_coded(&ctx->dst_fmt);
+	ave_publish_hevc_level(ctx);
 	return 0;
 }
 
@@ -380,11 +384,64 @@ static int ave_s_selection(struct file *file, void *priv, struct v4l2_selection 
 	return 0;
 }
 
+static bool ave_parm_ok(u32 type)
+{
+	switch (type) {
+	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
+	case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* Process repeats fps_int and the fps float on every frame. */
+static void ave_live_fps(struct ave_ctx *ctx)
+{
+	struct ave_session *sess = ctx->sess;
+	u32 num, den, fps;
+
+	if (!sess)
+		return;
+	num = ctx->timeperframe.denominator;
+	den = ctx->timeperframe.numerator;
+	if (!num || !den)
+		return;
+	fps = max_t(u32, DIV_ROUND_CLOSEST(num, den), 1);
+	WRITE_ONCE(sess->p.fps_num, num);
+	WRITE_ONCE(sess->p.fps_den, den);
+	WRITE_ONCE(sess->p.fps_int, fps);
+}
+
+/*
+ * The firmware SPS already uses the lowest level that fits. Raise the
+ * control to that when the client left it lower, so G_CTRL matches the
+ * stream. A higher request stays. Not called from s_ctrl.
+ */
+static void ave_publish_hevc_level(struct ave_ctx *ctx)
+{
+	s32 min_idx, cur;
+
+	if (!ctx->hevc_level_ctrl)
+		return;
+	min_idx = ave_min_hevc_level_index(ctx);
+	cur = v4l2_ctrl_g_ctrl(ctx->hevc_level_ctrl);
+	if (cur < min_idx)
+		v4l2_ctrl_s_ctrl(ctx->hevc_level_ctrl, min_idx);
+}
+
 static int ave_g_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 {
 	struct ave_ctx *ctx = ave_file_to_ctx(file);
 
-	if (!V4L2_TYPE_IS_OUTPUT(a->type))
+	/*
+	 * v4l2-ctl --get-parm uses VIDEO_CAPTURE. timeperframe sits at the
+	 * same offsets in the output and capture parm unions. Chromium sets
+	 * OUTPUT_MPLANE.
+	 */
+	if (!ave_parm_ok(a->type))
 		return -EINVAL;
 	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
 	a->parm.output.timeperframe = ctx->timeperframe;
@@ -396,7 +453,7 @@ static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 	struct ave_ctx *ctx = ave_file_to_ctx(file);
 	struct v4l2_fract *t = &a->parm.output.timeperframe;
 
-	if (!V4L2_TYPE_IS_OUTPUT(a->type))
+	if (!ave_parm_ok(a->type))
 		return -EINVAL;
 	if (!t->numerator || !t->denominator)
 		*t = ctx->timeperframe;
@@ -407,6 +464,8 @@ static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 		*t = (struct v4l2_fract){ 1, 1 };
 	ctx->timeperframe = *t;
 	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
+	ave_live_fps(ctx);
+	ave_publish_hevc_level(ctx);
 	return 0;
 }
 
@@ -429,13 +488,21 @@ static int ave_encoder_cmd(struct file *file, void *priv, struct v4l2_encoder_cm
 		return 0;
 
 	if (ec->cmd == V4L2_ENC_CMD_STOP) {
-		if (ctx->draining || ctx->stopped)
+		/*
+		 * v4l2_update_last_buf_state(): a second STOP while the
+		 * drain is still in progress is EBUSY. STOP after the
+		 * encoder has already stopped does nothing.
+		 */
+		if (ctx->draining && !ctx->stopped)
+			return -EBUSY;
+		if (ctx->stopped)
 			return 0;
 		ctx->drain_src = v4l2_m2m_last_src_buf(m2m);
 		ctx->draining = true;
 		if (!ctx->drain_src)
 			WRITE_ONCE(ctx->flush_pending, true);
 	} else {
+		/* START is EBUSY until the drain has published stopped. */
 		if (ctx->draining && !ctx->stopped)
 			return -EBUSY;
 		ctx->draining = false;
@@ -500,7 +567,17 @@ static int ave_s_ctrl(struct v4l2_ctrl *ctrl)
 		ctx->bitrate_mode = ctrl->val;
 		break;
 	case V4L2_CID_MPEG_VIDEO_CONSTANT_QUALITY:
-		ctx->quality = ctrl->val;
+		WRITE_ONCE(ctx->quality, ctrl->val);
+		smp_store_release(&ctx->quality_set, 1);
+		break;
+	case V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE:
+		/*
+		 * Chromium's V4L2 encoder treats this as the one mandatory
+		 * control and fails the session if it is missing. The mode
+		 * the firmware is given is still bitrate_mode, which Chromium
+		 * sets to CBR on the next control.
+		 */
+		ctx->frame_rc = ctrl->val;
 		break;
 	case V4L2_CID_MPEG_VIDEO_BITRATE:
 		WRITE_ONCE(ctx->bitrate, ctrl->val);
@@ -574,7 +651,7 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 	const struct v4l2_ctrl_ops *ops = &ave_ctrl_ops;
 	struct v4l2_ctrl *c;
 
-	v4l2_ctrl_handler_init(hdl, 19);
+	v4l2_ctrl_handler_init(hdl, 20);
 
 	/*
 	 * 6070 constant quality stays the default, so a client that never
@@ -595,6 +672,12 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 				       V4L2_MPEG_VIDEO_BITRATE_MODE_VBR);
 	/* Constant quality: 100 is the best; same scale as VideoToolbox's 0.0-1.0. */
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_CONSTANT_QUALITY, 0, 100, 1, 50);
+	/*
+	 * Frame-level rate control. Chromium refuses to encode without it.
+	 * Default on matches a bitrate-mode client; constant quality ignores it
+	 * and keeps FIXQP.
+	 */
+	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE, 0, 1, 1, 1);
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE, 100000, 100000000, 1,
 			  4000000);
 	/*
@@ -651,9 +734,10 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 					       V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN,
 					       ~BIT(V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN),
 					       V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN);
-	v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_LEVEL,
-			       V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1, 0,
-			       V4L2_MPEG_VIDEO_HEVC_LEVEL_1);
+	ctx->hevc_level_ctrl =
+		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_LEVEL,
+				       V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1, 0,
+				       V4L2_MPEG_VIDEO_HEVC_LEVEL_1);
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP, 0, 51, 1, 0);
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP, 0, 51, 1, 51);
 
@@ -720,6 +804,13 @@ static int ave_buf_prepare(struct vb2_buffer *vb)
 
 	if (vb2_plane_size(vb, 0) < f->plane_fmt[0].sizeimage)
 		return -EINVAL;
+	if (vb->vb2_queue->memory == VB2_MEMORY_USERPTR &&
+	    V4L2_TYPE_IS_OUTPUT(vb->type)) {
+		int copied = ave_vb2_sync_userptr(vb);
+
+		if (copied)
+			return copied;
+	}
 	/* Keep what the client filled in, so its layout can be checked. */
 	if (V4L2_TYPE_IS_OUTPUT(vb->type) && !vb2_get_plane_payload(vb, 0))
 		vb2_set_plane_payload(vb, 0, f->plane_fmt[0].sizeimage);
@@ -986,6 +1077,7 @@ static int ave_session_begin(struct ave_ctx *ctx)
 	    READ_ONCE(ave->fw_state) == AVE_FW_BROKEN ||
 	    READ_ONCE(ave->fw_state) == AVE_FW_RECOVERING)
 		pm_runtime_suspend(ave->dev);
+	ave_publish_hevc_level(ctx);
 	sess = ave_sess_create(ctx);
 	if (IS_ERR(sess)) {
 		dev_err(ave->dev, "cannot set up a session: %ld\n", PTR_ERR(sess));
@@ -1131,7 +1223,7 @@ static int ave_queue_init(void *priv, struct vb2_queue *src, struct vb2_queue *d
 	int ret;
 
 	src->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	src->io_modes = VB2_MMAP | VB2_DMABUF;
+	src->io_modes = VB2_MMAP | VB2_DMABUF | VB2_USERPTR;
 	src->drv_priv = ctx;
 	src->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
 	src->ops = &ave_qops;
@@ -1180,6 +1272,20 @@ static int ave_job_ready(void *priv)
 }
 
 /*
+ * The LAST buffer is what tells the client the drain finished. stopped
+ * has to be visible before that buffer is done: Chromium dequeues LAST
+ * and issues VIDIOC_ENCODER_CMD START immediately, and START is EBUSY
+ * while draining && !stopped. Publishing after buf_done loses that race
+ * because ave_session_free() still runs before the old flag store.
+ */
+static void ave_mark_drain_stopped(struct ave_ctx *ctx)
+{
+	ctx->draining = false;
+	WRITE_ONCE(ctx->flush_pending, false);
+	ctx->stopped = true;
+}
+
+/*
  * Hand finished frames, in bitstream order, to CAPTURE buffers. Returns
  * true when the frame that ends a drain went out (with the LAST flag).
  */
@@ -1219,6 +1325,7 @@ static bool ave_deliver(struct ave_ctx *ctx)
 		if (READ_ONCE(ctx->flush_pending) && !sess->fw_open && !sess->done_count) {
 			dst->flags |= V4L2_BUF_FLAG_LAST;
 			last = true;
+			ave_mark_drain_stopped(ctx);
 		}
 		ave_vb2_put(s->input_mem);
 		s->input_mem = NULL;
@@ -1335,6 +1442,7 @@ static bool ave_finish_drain(struct ave_ctx *ctx)
 	vb2_set_plane_payload(&dst->vb2_buf, 0, 0);
 	dst->flags |= V4L2_BUF_FLAG_LAST;
 	dst->sequence = ctx->dst_sequence++;
+	ave_mark_drain_stopped(ctx);
 	v4l2_m2m_buf_done(dst, VB2_BUF_STATE_DONE);
 	return true;
 }
@@ -1417,10 +1525,12 @@ static void ave_run_work(struct work_struct *work)
 	if (ret) {
 		ave_job_fail(ctx, ret);
 	} else if (eos) {
+		/*
+		 * stopped was published before LAST was done. A START may
+		 * already have cleared it; setting it again would undo the
+		 * resume.
+		 */
 		ave_session_free(ctx);
-		ctx->draining = false;
-		WRITE_ONCE(ctx->flush_pending, false);
-		ctx->stopped = true;
 		v4l2_event_queue_fh(&ctx->fh, &ave_eos_event);
 	} else if (poll) {
 		mod_delayed_work(ave->wq, &ctx->poll_work, msecs_to_jiffies(AVE_WATCH_MS));
@@ -1532,6 +1642,7 @@ static int ave_open(struct file *file)
 	ret = ave_init_ctrls(ctx);
 	if (ret)
 		goto err_fh;
+	ave_publish_hevc_level(ctx);
 
 	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(ave->m2m_dev, ctx, ave_queue_init);
 	if (IS_ERR(ctx->fh.m2m_ctx)) {
