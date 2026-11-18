@@ -901,6 +901,24 @@ static void ave_6070_start_process_fields(struct kunit *test)
 								   pl->list0_recon.luma_data),
 						0ULL);
 			}
+			/* CQ above keeps 0xffff/100. Non-CQ clears the floor. */
+			if (codec == AVE_CODEC_H264) {
+				sess->p.rc_mode = AVE_RC_CBR;
+				memset(process, 0, 0x6838);
+				KUNIT_ASSERT_EQ(test,
+						ave_build_process(ctx, process, process_len, 0,
+								  0x8f0000000ULL, 1000000, false,
+								  false),
+						0);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(process + pl->static_area_mask),
+						0U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(process +
+								     pl->static_area_threshold),
+						0U);
+				sess->p.rc_mode = AVE_RC_CQ;
+			}
 		}
 }
 

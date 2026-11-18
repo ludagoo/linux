@@ -1302,10 +1302,24 @@ int ave_build_process(struct ave_ctx *ctx, u8 *cmd, size_t len,
 		cmd[l->first_process] = sess->frames == 0;
 	if (l->avg_variance)
 		ave_put32(cmd, l->avg_variance, U32_MAX);
-	if (l->static_area_mask)
-		ave_put32(cmd, l->static_area_mask, AVE_AVC_STATIC_AREA_MASK_ALL);
-	if (l->static_area_threshold)
-		ave_put32(cmd, l->static_area_threshold, 100);
+	/*
+	 * 6070 H.264 treats mask 0xffff as low-QP on every static
+	 * macroblock. A static source then ignores a lower target.
+	 * Constant quality keeps the mask. HEVC has no such fields.
+	 */
+	if (l->static_area_mask || l->static_area_threshold) {
+		u32 mask = AVE_AVC_STATIC_AREA_MASK_ALL;
+		u32 thresh = 100;
+
+		if (fw->kind == AVE_LAYOUT_6070 && p->rc_mode != AVE_RC_CQ) {
+			mask = 0;
+			thresh = 0;
+		}
+		if (l->static_area_mask)
+			ave_put32(cmd, l->static_area_mask, mask);
+		if (l->static_area_threshold)
+			ave_put32(cmd, l->static_area_threshold, thresh);
+	}
 	ave_put32(cmd, l->slot, slot);
 	ave_put64(cmd, l->coded, s->coded.dma);
 	ave_put64(cmd, l->meta, s->meta.dma);
