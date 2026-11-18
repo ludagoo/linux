@@ -16,6 +16,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/iommu.h>
 #include <linux/log2.h>
+#include <linux/moduleparam.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/sort.h>
@@ -32,6 +33,17 @@
 /* Filler-data NAL unit types */
 #define AVE_H264_NAL_FILLER 12
 #define AVE_HEVC_NAL_FILLER 38
+
+/*
+ * Host CBR filler. The firmware's coded rate already tracks the target;
+ * padding each frame up to bitrate/fps wastes uplink, and WebRTC's
+ * packetizer drops filler NALs. Chromium's V4L2 encoder sets
+ * V4L2_MPEG_VIDEO_BITRATE_MODE_CBR and FRAME_RC_ENABLE, so that path is
+ * filler-free unless this is set. cbr_pad=1 restores the padded wire rate.
+ */
+static bool ave_cbr_pad;
+module_param_named(cbr_pad, ave_cbr_pad, bool, 0644);
+MODULE_PARM_DESC(cbr_pad, "Pad CBR frames with filler NALs (default: off)");
 
 #define AVE_H264_BASELINE 2
 #define AVE_H264_MAIN 4
@@ -159,9 +171,11 @@ static int ave_sess_params(struct ave_ctx *ctx, struct ave_params *p)
 	p->stride = ctx->src_fmt.plane_fmt[0].bytesperline;
 	p->sample_bytes = ctx->src_fmt.pixelformat == V4L2_PIX_FMT_P010 ? 2 : 1;
 	p->mbs = (p->cw / 16) * (p->ch / 16);
-	p->fps_num = ctx->timeperframe.denominator;
-	p->fps_den = ctx->timeperframe.numerator;
-	p->fps_int = max(DIV_ROUND_CLOSEST(p->fps_num, p->fps_den), 1U);
+	/* Integer fps. A raw 1000/30000 fraction is 30000 to the firmware. */
+	p->fps_int = ave_fps_reduce(ctx->timeperframe.numerator,
+				    ctx->timeperframe.denominator);
+	p->fps_num = p->fps_int;
+	p->fps_den = 1;
 
 	if (p->codec == AVE_CODEC_H264) {
 		switch (ctx->h264_profile) {
@@ -1875,7 +1889,7 @@ static size_t ave_sess_cbr_fill(struct ave_ctx *ctx, u8 *out, size_t len, size_t
 	s64 budget, vbv, excess, pad;
 	u8 *f;
 
-	if (p->rc_mode != AVE_RC_CBR)
+	if (p->rc_mode != AVE_RC_CBR || !ave_cbr_pad)
 		return len;
 	/* s_ctrl updates ctx->bitrate while the session is open. */
 	bitrate = READ_ONCE(ctx->bitrate);

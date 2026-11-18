@@ -8,6 +8,7 @@
 #define _APPLE_AVE_H_
 
 #include <linux/atomic.h>
+#include <linux/math64.h>
 #include <linux/platform_device.h>
 #include <linux/sizes.h>
 #include <linux/spinlock.h>
@@ -48,6 +49,29 @@ struct ave_mctf_layout;
 #define AVE_6070_RC_OFF 0
 #define AVE_6070_RC_ON 1
 #define AVE_6070_RC_FIXQP 2
+
+/*
+ * v4l2 timeperframe is seconds per frame. The 6070 rate controller reads
+ * the Start fps words as an integer frame rate (ui32ExpectedFrameRate at
+ * host 0xff4c, the denominator at host 0xff48) and divides the bit rate by
+ * that numerator. v4l2-ctl --set-parm=N sends 1000/(N*1000); storing that
+ * fraction makes the firmware divide by N*1000 and every target hits the
+ * QP ceiling. Reduce to an integer fps in 1..240 before those words,
+ * G_PARM, and the timing VUI. 1000/30000 becomes 30/1. Chromium already
+ * sends 1/N, which reduces to the same N.
+ */
+static inline u32 ave_fps_reduce(u32 numerator, u32 denominator)
+{
+	u32 fps;
+
+	if (!numerator || !denominator)
+		return 30;
+	if ((u64)denominator > (u64)numerator * 240)
+		return 240;
+	fps = DIV_ROUND_CLOSEST_ULL(denominator, numerator);
+	return fps ? fps : 1;
+}
+
 /*
  * InitEncodingParameters copies its command+0xfc78 onto controller+0xa7c.
  * Bit 1 is the SPS/PPS log. Bit 4 is the init-params log, which prints
