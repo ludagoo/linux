@@ -143,6 +143,7 @@ static int ave_sess_params(struct ave_ctx *ctx, struct ave_params *p)
 	p->fps_int = max(DIV_ROUND_CLOSEST(p->fps_num, p->fps_den), 1U);
 	p->h264_inter = variant->h264_inter;
 	p->rate_control = variant->rate_control;
+	p->low_delay = variant->low_delay;
 	/*
 	 * The rate controller divides the bit rate by the frame-rate
 	 * numerator, so 1000/30000 s would divide it by 30000. Give it the

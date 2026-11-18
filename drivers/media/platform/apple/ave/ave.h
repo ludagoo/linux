@@ -266,6 +266,8 @@ struct ave_variant {
 	bool h264_inter;
 	/* CBR and VBR run the firmware rate controller. */
 	bool rate_control;
+	/* No B-frames by default; each frame is answered before the next. */
+	bool low_delay;
 };
 
 /* Start surfaces of an MCTF session, aliases included */
@@ -408,6 +410,7 @@ struct ave_params {
 	/* The variant's 6070 encode settings, see struct ave_variant. */
 	bool h264_inter;
 	bool rate_control;
+	bool low_delay;
 	u32 slots;
 	u32 refs; /* max_num_ref_frames + 1 */
 	bool bframes;

@@ -41,9 +41,10 @@ pictures are kept as references and the inter mode decision is weighted. CBR and
 VBR are offered: both are firmware rate control on, the frame rate is rounded to
 an integer, and a frame rate or bit rate set while streaming scales the bit rate
 of the next Process. The firmware's coded rate stays under a CBR target; the
-host pads to it with filler data. These T6021 settings were found by
-disassembling its firmware image and the macOS driver's device table, and
-checked on hardware; they are not from the ledgers above.
+host pads to it with filler data. B pictures default to off, and without them
+each frame is answered before the next is submitted. These T6021 settings were
+found by disassembling its firmware image and the macOS driver's device table,
+and checked on hardware; they are not from the ledgers above.
 
 Lifecycle-only validation
 -------------------------
