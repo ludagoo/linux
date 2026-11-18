@@ -176,6 +176,8 @@ static int ave_sess_params(struct ave_ctx *ctx, struct ave_params *p)
 				    ctx->timeperframe.denominator);
 	p->fps_num = p->fps_int;
 	p->fps_den = 1;
+	/* Start samples this once. A later S_PARM must not move it. */
+	p->fps_base = p->fps_int;
 
 	if (p->codec == AVE_CODEC_H264) {
 		switch (ctx->h264_profile) {

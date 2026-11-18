@@ -1226,6 +1226,7 @@ int ave_build_process(struct ave_ctx *ctx, u8 *cmd, size_t len,
 	struct ave_6070_picture pic = { };
 	dma_addr_t y = input;
 	u64 pts;
+	u32 rc_bitrate;
 
 	if (!fw->encode_ready)
 		return -EOPNOTSUPP;
@@ -1356,20 +1357,37 @@ int ave_build_process(struct ave_ctx *ctx, u8 *cmd, size_t len,
 		}
 	}
 
+	/*
+	 * CRateControl copies fps into RC+0x2c4 only at Start. Each process
+	 * command re-reads its bitrate (H.264 +0x9d0 into RC+0x73c) and slews
+	 * RC+0x2b8 to that word; bits per frame are the slewed rate divided
+	 * by the Start fps. Scale a live S_PARM into the bitrate. The fps
+	 * words below stay the true rate for timestamps.
+	 */
+	rc_bitrate = bitrate;
+	if (bitrate && p->fps_base) {
+		u32 now = READ_ONCE(sess->p.fps_int);
+
+		if (now && now != p->fps_base)
+			rc_bitrate = (u32)min_t(u64,
+				div_u64((u64)bitrate * p->fps_base, now),
+				U32_MAX);
+	}
 	/* Session values repeated in every frame */
 	ave_put32(cmd, l->coded_cap, p->coded_cap);
 	ave_put32(cmd, l->fps_int, p->fps_int);
 	/* The bit rate may change while streaming; it takes effect here. */
 	if (l->bitrate)
 		ave_put32(cmd, l->bitrate,
-			  p->rc_mode == 3 && fw->kind == AVE_LAYOUT_6070 ? 0 : bitrate);
+			  p->rc_mode == 3 && fw->kind == AVE_LAYOUT_6070 ? 0 :
+			  rc_bitrate);
 	/*
 	 * 6070 VBR's data-rate cap follows the live bit rate (twice the
 	 * average over one second). The Start image only has the rate from
 	 * when the session was opened.
 	 */
-	if (fw->kind == AVE_LAYOUT_6070 && p->rc_mode == AVE_RC_VBR && bitrate) {
-		u32 limit = (u32)min_t(u64, 2ULL * bitrate / 8, U32_MAX);
+	if (fw->kind == AVE_LAYOUT_6070 && p->rc_mode == AVE_RC_VBR && rc_bitrate) {
+		u32 limit = (u32)min_t(u64, 2ULL * rc_bitrate / 8, U32_MAX);
 
 		if (l->limits)
 			ave_put32(cmd, l->limits, 1);
