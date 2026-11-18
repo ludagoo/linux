@@ -198,13 +198,14 @@ int ave_cmd_start(struct ave_ctx *ctx)
 		const struct ave_start_layout *sl = &fw->start[p->codec - 1];
 
 		dev_info(ave->dev,
-			 "Start submitted: %zu bytes rc %u bitrate %u ui32Bitrate %u expected_fps %u rc_flag %u verbose %u\n",
+			 "Start submitted: %zu bytes rc %u bitrate %u ui32Bitrate %u expected_fps %u rc_flag %u verbose %u rc_flags %#x\n",
 			 len, p->rc_mode, p->bitrate,
 			 get_unaligned_le32(cmd + sl->rc_param_bitrate),
 			 get_unaligned_le32(cmd + sl->rc_param_fps),
 			 get_unaligned_le32(cmd + sl->rc_param_flag),
 			 sl->verbose_params ?
-				get_unaligned_le32(cmd + sl->verbose_params) : 0);
+				get_unaligned_le32(cmd + sl->verbose_params) : 0,
+			 sl->rc_flags ? get_unaligned_le32(cmd + sl->rc_flags) : 0);
 	} else {
 		dev_info(ave->dev,
 			 "Start submitted: %zu bytes rc %u bitrate %u\n",

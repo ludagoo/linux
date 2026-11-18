@@ -856,7 +856,16 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 	ave_start_put32(cmd, l->max_qp, max_qp);
 	ave_start_put32(cmd, l->min_qp2, min_qp);
 	ave_start_put32(cmd, l->max_qp2, max_qp);
-	ave_start_put32(cmd, l->rc_flags, cq ? 0 : hevc ? 0x736 : 0x8202);
+	/*
+	 * 6070 H.264 sets bit 4 of rc_flags as a probe. The firmware's
+	 * init command is this buffer plus 0x60, so 0xfcd8 is the word
+	 * copied to controller+0xa7c. Bit 4 asks for the init-params log.
+	 * The other bits stay 0x8202. HEVC and older layouts are unchanged.
+	 */
+	if (fw->kind == AVE_LAYOUT_6070 && !hevc && !cq)
+		ave_start_put32(cmd, l->rc_flags, AVE_6070_H264_RC_FLAGS_PROBE);
+	else
+		ave_start_put32(cmd, l->rc_flags, cq ? 0 : hevc ? 0x736 : 0x8202);
 	ave_start_put32(cmd, l->rc_310, cq ? 0 : 30);
 	if (!hevc)
 		ave_start_put32(cmd, l->h264_380, 1);

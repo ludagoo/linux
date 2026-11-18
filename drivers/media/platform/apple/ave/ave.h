@@ -49,11 +49,20 @@ struct ave_mctf_layout;
 #define AVE_6070_RC_ON 1
 #define AVE_6070_RC_FIXQP 2
 /*
- * InitEncodingParameters copies command+0xfc78 onto controller+0xa7c.
- * Bit 1 is the SPS/PPS log that already runs. Bit 4 is the init-params
- * log, which prints the rate-control flag the same block stored.
+ * InitEncodingParameters copies its command+0xfc78 onto controller+0xa7c.
+ * Bit 1 is the SPS/PPS log. Bit 4 is the init-params log, which prints
+ * the rate-control flag the same block stored.
+ *
+ * That command base is the host Start buffer plus 0x60
+ * (CAVCommonController::Init adds 0x60 before ProcessInit). The host
+ * word the firmware reads as 0xfc78 is therefore 0xfcd8, which is also
+ * where this driver stores rc_flags. 0x8202 already has bit 1 set, which
+ * is why the SPS dump runs while 0x12 at the unshifted 0xfc78 does not.
+ * Bit 4 of that same word asks for the rate-control flag line.
  */
 #define AVE_6070_VERBOSE_PROBE 0x12
+#define AVE_6070_H264_RC_FLAGS 0x8202
+#define AVE_6070_H264_RC_FLAGS_PROBE (AVE_6070_H264_RC_FLAGS | 0x10)
 
 #define AVE_MAX_SLOTS 7
 /* Sessions one firmware boot serves at once (macOS was seen running two). */
