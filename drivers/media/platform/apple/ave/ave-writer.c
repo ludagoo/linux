@@ -1366,8 +1366,10 @@ int ave_build_process(struct ave_ctx *ctx, u8 *cmd, size_t len,
 	 */
 	rc_bitrate = bitrate;
 	if (bitrate && p->fps_base) {
-		u32 now = READ_ONCE(sess->p.fps_int);
+		u32 now = READ_ONCE(sess->p.fps_now);
 
+		if (!now)
+			now = p->fps_int;
 		if (now && now != p->fps_base)
 			rc_bitrate = (u32)min_t(u64,
 				div_u64((u64)bitrate * p->fps_base, now),
