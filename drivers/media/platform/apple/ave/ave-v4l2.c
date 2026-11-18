@@ -397,7 +397,11 @@ static bool ave_parm_ok(u32 type)
 	}
 }
 
-/* Process repeats fps_int and the fps float on every frame. */
+/*
+ * Process repeats fps_int and the fps float on every frame. The rate
+ * controller does not read those words after Start; ave_build_process
+ * scales the live bitrate by fps_base/fps_now so bits per frame follow.
+ */
 static void ave_live_fps(struct ave_ctx *ctx)
 {
 	struct ave_session *sess = ctx->sess;
