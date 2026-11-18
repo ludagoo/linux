@@ -571,6 +571,8 @@ struct ave_ctx {
 	struct v4l2_ctrl *hevc_profile_ctrl;
 	struct v4l2_ctrl *hevc_level_ctrl;
 	bool hevc_profile_auto; /* Main 10 was set by S_FMT, not the client */
+	s32 hevc_level_auto; /* last level index published for the picture */
+	bool hevc_level_auto_valid;
 	struct v4l2_pix_format_mplane src_fmt;
 	struct v4l2_pix_format_mplane dst_fmt;
 	struct v4l2_fract timeperframe;
