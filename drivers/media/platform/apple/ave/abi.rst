@@ -42,9 +42,12 @@ VBR are offered: both are firmware rate control on, the frame rate is rounded to
 an integer, and a frame rate or bit rate set while streaming scales the bit rate
 of the next Process. The firmware's coded rate stays under a CBR target; the
 host pads to it with filler data. B pictures default to off, and without them
-each frame is answered before the next is submitted. These T6021 settings were
-found by disassembling its firmware image and the macOS driver's device table,
-and checked on hardware; they are not from the ledgers above.
+each frame is answered before the next is submitted. The firmware leaves VUI
+timing out of its parameter sets and the driver adds it: H.264 num_units_in_tick
+1 and time_scale twice the frame rate, HEVC time_scale the frame rate. These
+T6021 settings were found by disassembling its firmware image and the macOS
+driver's device table, and checked on hardware; they are not from the ledgers
+above.
 
 Lifecycle-only validation
 -------------------------

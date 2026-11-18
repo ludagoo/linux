@@ -5,6 +5,7 @@
 #include <linux/module.h>
 #include <linux/crc32.h>
 #include <linux/errno.h>
+#include <linux/hex.h>
 #include <linux/string.h>
 #include <linux/unaligned.h>
 
@@ -1445,6 +1446,10 @@ static void ave_6070_variants(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, ave_t6021.low_delay);
 	KUNIT_EXPECT_FALSE(test, ave_t6000.low_delay);
 	KUNIT_EXPECT_FALSE(test, ave_t8112.low_delay);
+	/* Only T6021 rewrites the parameter sets' VUI timing. */
+	KUNIT_EXPECT_TRUE(test, ave_t6021.vui_timing);
+	KUNIT_EXPECT_FALSE(test, ave_t6000.vui_timing);
+	KUNIT_EXPECT_FALSE(test, ave_t8112.vui_timing);
 	KUNIT_EXPECT_EQ(test, ave_t6000.regs->ctrl, 0x400044U);
 	KUNIT_EXPECT_EQ(test, ave_t8112.regs->timebase, 0x178000U);
 	KUNIT_EXPECT_GE(test, t->command_bytes, 0x32dc8U);
@@ -1757,6 +1762,59 @@ static void ave_6070_qualified_bytes(struct kunit *test)
 	}
 }
 
+/* The SPS timing rewrite, on parameter sets the T6021 firmware wrote. */
+static void ave_sps_timing(struct kunit *test)
+{
+	static const struct {
+		bool hevc;
+		const char *in, *out;
+	} cases[] = {
+		/* H.264 without VUI: a minimal VUI with timing is added. */
+		{ false, "274d001fda014016e4",
+		  "274d001fda014016e840000003004000000f21" },
+		/* H.264 with VUI: timing goes in, the rest of the VUI moves. */
+		{ false, "274d0028e5603c0113f2c03c20104e",
+		  "274d0028e5603c0113f2c2000003000200000300791e100827" },
+		/* HEVC without VUI. */
+		{
+			true,
+			"420101016000000300b0000003000003005da00280802d165aee4522ae5cb97040",
+			"420101016000000300b0000003000003005da00280802d165aee4522ae5cb9710080000003008000000f04",
+		},
+		/* A PPS is left alone. */
+		{ false, "68ee3c80", "68ee3c80" },
+	};
+	u8 *buf = kunit_kzalloc(test, 256, GFP_KERNEL);
+	u8 *want = kunit_kzalloc(test, 256, GFP_KERNEL);
+	size_t short_len;
+
+	KUNIT_ASSERT_NOT_NULL(test, buf);
+	KUNIT_ASSERT_NOT_NULL(test, want);
+	for (unsigned int i = 0; i < ARRAY_SIZE(cases); i++) {
+		size_t in = strlen(cases[i].in) / 2;
+		size_t out = strlen(cases[i].out) / 2;
+		size_t len = 4 + in;
+
+		memset(buf, 0, 256);
+		buf[3] = 1;
+		KUNIT_ASSERT_EQ(test, hex2bin(buf + 4, cases[i].in, in), 0);
+		KUNIT_ASSERT_EQ(test, hex2bin(want, cases[i].out, out), 0);
+		if (cases[i].hevc)
+			ave_hevc_stamp_timing(buf, 256, &len, 30, 1);
+		else
+			ave_h264_stamp_timing(buf, 256, &len, 30, 1);
+		KUNIT_EXPECT_EQ(test, len, 4 + out);
+		KUNIT_EXPECT_MEMEQ(test, buf + 4, want, out);
+	}
+	/* No room to grow: the buffer is not touched. */
+	memset(buf, 0, 256);
+	buf[3] = 1;
+	short_len = 4 + strlen(cases[0].in) / 2;
+	KUNIT_ASSERT_EQ(test, hex2bin(buf + 4, cases[0].in, short_len - 4), 0);
+	ave_h264_stamp_timing(buf, short_len, &short_len, 30, 1);
+	KUNIT_EXPECT_EQ(test, short_len, 4 + strlen(cases[0].in) / 2);
+}
+
 static struct kunit_case ave_abi_cases[] = {
 	KUNIT_CASE(ave_t6041_text_boot_word),
 	KUNIT_CASE(ave_9003_byte_equality), KUNIT_CASE(ave_9003_hevc_main10),
@@ -1768,6 +1826,7 @@ static struct kunit_case ave_abi_cases[] = {
 	KUNIT_CASE(ave_6070_qualified_bytes),
 	KUNIT_CASE(ave_6070_h264_inter),
 	KUNIT_CASE(ave_6070_rate_control),
+	KUNIT_CASE(ave_sps_timing),
 	KUNIT_CASE(ave_6070_reordered_pictures),
 	KUNIT_CASE(ave_6070_hevc_contract),
 	KUNIT_CASE(ave_6070_entropy_interleave),

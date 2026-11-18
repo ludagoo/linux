@@ -115,6 +115,7 @@ const struct ave_variant ave_t6021 = {
 	.h264_inter = true,
 	.rate_control = true,
 	.low_delay = true,
+	.vui_timing = true,
 };
 
 /*

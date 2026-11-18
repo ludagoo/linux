@@ -268,6 +268,8 @@ struct ave_variant {
 	bool rate_control;
 	/* No B-frames by default; each frame is answered before the next. */
 	bool low_delay;
+	/* The driver adds VUI timing to the firmware's parameter sets. */
+	bool vui_timing;
 };
 
 /* Start surfaces of an MCTF session, aliases included */
@@ -411,6 +413,7 @@ struct ave_params {
 	bool h264_inter;
 	bool rate_control;
 	bool low_delay;
+	bool vui_timing;
 	u32 slots;
 	u32 refs; /* max_num_ref_frames + 1 */
 	bool bframes;
@@ -679,6 +682,11 @@ int ave_sess_free_slot(struct ave_session *sess);
 void ave_sess_reply(struct ave_dev *ave, const struct ave_reply *reply);
 int ave_sess_input(struct ave_ctx *ctx, unsigned int slot,
 		   struct vb2_v4l2_buffer *src, dma_addr_t *input);
+/* Add VUI timing to the SPS at the start of an Annex B buffer. */
+void ave_h264_stamp_timing(u8 *buf, size_t room, size_t *len, u32 fps_num,
+			   u32 fps_den);
+void ave_hevc_stamp_timing(u8 *buf, size_t room, size_t *len, u32 fps_num,
+			   u32 fps_den);
 int ave_sess_output(struct ave_ctx *ctx, unsigned int slot,
 		    struct vb2_v4l2_buffer *dst, bool *keyframe);
 void ave_sess_prepare_slot(struct ave_session *sess, unsigned int slot);
