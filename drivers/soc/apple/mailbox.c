@@ -223,6 +223,11 @@ struct apple_mbox_ascwrap_v6_role_desc {
 struct apple_mbox_hw {
 	unsigned int reg_offset;
 	bool is_ascwrap_v6;
+	/*
+	 * T6050 J775D GPU mailboxes: no mailbox-level IRQ mask (like v8). Receive
+	 * uses the recv-not-empty line with the v8 storm guard and poll fallback.
+	 */
+	bool ascwrap_v6_v8_rx;
 	const struct apple_mbox_ascwrap_v6_role_desc *ascwrap_v6_roles;
 	unsigned int num_ascwrap_v6_roles;
 	/* T8152 GPU ASCWrap v8: wrapper + iop-vbar + post-office window + PSD. */
@@ -260,7 +265,7 @@ struct apple_mbox_priv {
 	struct apple_mbox mbox;
 	/* ASCWrap v8 only: the provider's PMGR2 PSD service block (read-only). */
 	void __iomem *psd_regs;
-	/* ASCWrap v8 only: receive by polling; fixed at probe. */
+	/* v8 / J775D v6: receive by polling; fixed at probe until storm guard. */
 	bool rx_poll_only;
 	/* rx_lock: recv interrupt enabled and not yet disabled again. */
 	bool rx_irq_live;
@@ -276,10 +281,15 @@ static struct apple_mbox_priv *apple_mbox_to_priv(struct apple_mbox *mbox)
 	return container_of(mbox, struct apple_mbox_priv, mbox);
 }
 
+static bool apple_mbox_uses_v8_rx_path(const struct apple_mbox *mbox)
+{
+	return mbox->hw->is_ascwrap_v8 || mbox->hw->ascwrap_v6_v8_rx;
+}
+
 /* Only providers allocated by apple_mbox_probe() have a receive poller. */
 static bool apple_mbox_has_rx_poller(const struct apple_mbox *mbox)
 {
-	return mbox->hw->is_ascwrap_v8;
+	return apple_mbox_uses_v8_rx_path(mbox);
 }
 
 /* Both ASCWrap generations share the consumer lifecycle API below. */
@@ -983,7 +993,7 @@ static irqreturn_t apple_mbox_recv_irq(int irq, void *data)
 	spin_lock_irqsave(&mbox->rx_lock, flags);
 	if (likely(!READ_ONCE(mbox->removing)))
 		consumed = apple_mbox_poll_locked(mbox);
-	if (mbox->hw->is_ascwrap_v8)
+	if (apple_mbox_uses_v8_rx_path(mbox))
 		apple_mbox_v8_rx_irq_guard(mbox, consumed);
 	spin_unlock_irqrestore(&mbox->rx_lock, flags);
 
@@ -1658,6 +1668,19 @@ static int apple_mbox_probe(struct platform_device *pdev)
 			return ret;
 	}
 
+	if (mbox->hw->ascwrap_v6_v8_rx && mbox->irq_recv_not_empty >= 0) {
+		const char *role;
+
+		INIT_DELAYED_WORK(&priv->rx_poll_work, apple_mbox_v8_rx_poll_work);
+		priv->rx_poll_only = false;
+		if (of_property_read_string(dev->of_node, "apple,firmware-role", &role))
+			role = "unknown";
+		dev_info(dev,
+			 "%s ASCWrap v6 provider (J775D): recv-not-empty IRQ (irq %d); poll only after storm guard (%u empty edges)\n",
+			 role, mbox->irq_recv_not_empty,
+			 APPLE_ASCWRAP_V8_RX_STORM_LIMIT);
+	}
+
 	ret = devm_pm_runtime_enable(dev);
 	if (ret)
 		return ret;
@@ -1921,6 +1944,7 @@ static const struct apple_mbox_hw apple_mbox_t6050_ascwrap_v6_hw = {
 static const struct apple_mbox_hw apple_mbox_t6050_j775d_ascwrap_v6_hw = {
 	.reg_offset = APPLE_ASCWRAP_V6_MBOX_OFFSET,
 	.is_ascwrap_v6 = true,
+	.ascwrap_v6_v8_rx = true,
 	.ascwrap_v6_roles = apple_mbox_t6050_j775d_ascwrap_v6_roles,
 	.num_ascwrap_v6_roles = ARRAY_SIZE(apple_mbox_t6050_j775d_ascwrap_v6_roles),
 	.control_full = APPLE_ASC_MBOX_CONTROL_FULL,
