@@ -786,11 +786,15 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 
 	/* Rate control */
 	/*
-	 * Constant QP is mode 3 on 9003 and mode 2 on 6070. With 3 the 6070
-	 * firmware accepts Start but has no rate control for the session and
-	 * stops on the first Process.
+	 * Constant QP is mode 3 on 9003 and mode 2 (AVE_RC_FIXQP) on 6070.
+	 * With 3 the 6070 firmware accepts Start but has no rate control for
+	 * the session and stops on the first Process. CBR and VBR are mode 1
+	 * (AVE_RC_ON) on that firmware; AVE_RC_CBR is 2 and would select FIXQP.
 	 */
-	rc_mode = cq && l->rc_mode_fixed_qp ? l->rc_mode_fixed_qp : p->rc_mode;
+	if (fw->kind == AVE_LAYOUT_6070)
+		rc_mode = cq ? l->rc_mode_fixed_qp : AVE_6070_RC_ON;
+	else
+		rc_mode = cq && l->rc_mode_fixed_qp ? l->rc_mode_fixed_qp : p->rc_mode;
 	ave_start_put32(cmd, l->rc_mode, rc_mode);
 	ave_start_put32(cmd, l->bitrate,
 			cq && fw->kind == AVE_LAYOUT_6070 ? 0 : p->bitrate);
@@ -1248,11 +1252,27 @@ int ave_build_process(struct ave_ctx *ctx, u8 *cmd, size_t len,
 	if (l->bitrate)
 		ave_put32(cmd, l->bitrate,
 			  p->rc_mode == 3 && fw->kind == AVE_LAYOUT_6070 ? 0 : bitrate);
-	if (l->limits)
-		ave_put32(cmd, l->limits, p->limit_bytes ? 1 : 0);
-	if (l->limit_bytes && p->limit_bytes) {
-		ave_put64(cmd, l->limit_bytes, ave_f64(p->limit_bytes, 1));
-		ave_put64(cmd, l->limit_secs, ave_f64(1, 1));
+	/*
+	 * 6070 VBR's data-rate cap follows the live bit rate (twice the
+	 * average over one second). The Start image only has the rate from
+	 * when the session was opened.
+	 */
+	if (fw->kind == AVE_LAYOUT_6070 && p->rc_mode == AVE_RC_VBR && bitrate) {
+		u32 limit = (u32)min_t(u64, 2ULL * bitrate / 8, U32_MAX);
+
+		if (l->limits)
+			ave_put32(cmd, l->limits, 1);
+		if (l->limit_bytes) {
+			ave_put64(cmd, l->limit_bytes, ave_f64(limit, 1));
+			ave_put64(cmd, l->limit_secs, ave_f64(1, 1));
+		}
+	} else {
+		if (l->limits)
+			ave_put32(cmd, l->limits, p->limit_bytes ? 1 : 0);
+		if (l->limit_bytes && p->limit_bytes) {
+			ave_put64(cmd, l->limit_bytes, ave_f64(p->limit_bytes, 1));
+			ave_put64(cmd, l->limit_secs, ave_f64(1, 1));
+		}
 	}
 	if (l->frame_type)
 		ave_put32(cmd, l->frame_type, pic.type);

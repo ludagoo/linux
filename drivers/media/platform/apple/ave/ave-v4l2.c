@@ -46,7 +46,8 @@
 #define AVE_OUTPUT_BUDGET	(256 * SZ_1M)
 #define AVE_CAPTURE_BUDGET	(128 * SZ_1M)
 #define AVE_MAX_QUEUE_BUFS	16
-#define AVE_RESTART_TRIES	10
+/* Two hello waits, then the error sticks until the fd is closed. */
+#define AVE_RESTART_TRIES	2
 #define AVE_RESTART_WAIT_MS	100
 
 static const u32 ave_coded_fmts[] = {
@@ -576,14 +577,17 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 	v4l2_ctrl_handler_init(hdl, 19);
 
 	/*
-	 * The 6070 firmware path (M1 Pro/Max, M2) is qualified for constant
-	 * quality only: offer just that mode, so a client that keeps the
-	 * defaults (GStreamer, FFmpeg) gets a session instead of a refusal.
+	 * 6070 constant quality stays the default, so a client that never
+	 * sets the mode still gets the session that encodes. CBR and VBR are
+	 * offered as well: both are firmware rate-control ON, and CBR is
+	 * padded on the host. 9003 keeps VBR as its default.
 	 */
 	if (ctx->ave->layout && ctx->ave->layout->kind == AVE_LAYOUT_6070)
 		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
 				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ,
-				       ~BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CQ),
+				       ~(BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_VBR) |
+					 BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CBR) |
+					 BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CQ)),
 				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ);
 	else
 		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
@@ -604,8 +608,13 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 	/*
 	 * The firmware either uses up to three B-frames (reordering them
 	 * itself) or none. Baseline and intra-only H.264 never have any.
+	 * 6070 meetings want no B-frames: one frame in, one frame out.
+	 * 9003 counted layouts are only qualified with the three-B default.
 	 */
-	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_B_FRAMES, 0, 3, 3, 3);
+	if (ctx->ave->layout && ctx->ave->layout->kind == AVE_LAYOUT_6070)
+		v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_B_FRAMES, 0, 3, 1, 0);
+	else
+		v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_B_FRAMES, 0, 3, 3, 3);
 	v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_HEADER_MODE,
 			       V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME,
 			       BIT(V4L2_MPEG_VIDEO_HEADER_MODE_SEPARATE),
@@ -765,14 +774,18 @@ static unsigned int ave_session_count(struct ave_dev *ave)
 }
 
 /*
- * Drain normally, or Flush an aborted 6070 stream, then Stop and Close. The
- * last session to go halts the firmware. Caller holds hw_lock.
+ * Drain normally, or Flush an aborted 6070 stream, then Stop and Close.
+ * 9003's last session Halts. 6070's CPU domain stays powered under the
+ * DARTs, and a Halt then never answers hello again, so a clean Stop+Close
+ * leaves that firmware running for the next Open. Caller holds hw_lock.
  */
 static void ave_session_close(struct ave_ctx *ctx, bool drain)
 {
 	struct ave_dev *ave = ctx->ave;
 	struct ave_session *sess = ctx->sess;
 	int idx = ave_session_index(ave, ctx);
+	bool scratch_halt = ave->layout &&
+			    ave->layout->abi->transport->scratch_halt;
 
 	lockdep_assert_held(&ave->hw_lock);
 	if (!sess || idx < 0)
@@ -808,8 +821,26 @@ static void ave_session_close(struct ave_ctx *ctx, bool drain)
 		}
 	}
 	ave->sessions[idx] = NULL;
-	if (!ave_session_count(ave))
-		ave_fw_halt(ave);
+	if (ave_session_count(ave))
+		return;
+	/*
+	 * An open client the firmware did not Close, or a broken core, still
+	 * Halts. MCTF Halts too: its pool must not be freed while the
+	 * firmware may own it. System sleep Halts afterwards through
+	 * ave_fw_shutdown(), which is what actually stops a kept core.
+	 *
+	 * Close's answer is the proof this SoC can give that the firmware
+	 * dropped the surfaces. The CPU cannot be power-cycled safely while
+	 * the IOMMU holds ps_venc_sys, so the host frees those buffers
+	 * instead of quarantining them until a reset that will not come.
+	 */
+	if (scratch_halt && !ctx->mctf && !sess->fw_open &&
+	    ave->fw_state == AVE_FW_RUNNING) {
+		sess->handed = false;
+		dev_info(ave->dev, "session closed; firmware stays up for the next open\n");
+		return;
+	}
+	ave_fw_halt(ave);
 }
 
 /*
@@ -882,8 +913,21 @@ static int ave_session_attach_cycled(struct ave_ctx *ctx, bool *pm_lost)
 		ret = ave_session_attach(ctx);
 		mutex_unlock(&ave->hw_lock);
 	}
-	if (ret == -EAGAIN)
+	if (ret == -EAGAIN) {
 		dev_err(ave->dev, "coprocessor did not power down; cannot restart it\n");
+		ret = -EIO;
+	}
+	/*
+	 * A failed boot or command must not be retried for as long as this
+	 * fd is held. The client (ffmpeg) treats -EAGAIN as "try STREAMON
+	 * again", and each try used to spend another hello timeout.
+	 * Parameter and busy errors stay retryable.
+	 */
+	if (ret == -EIO || ret == -ETIMEDOUT || ret == -ENODEV) {
+		mutex_lock(&ave->hw_lock);
+		ave->boot_quiet = true;
+		mutex_unlock(&ave->hw_lock);
+	}
 	return ret;
 }
 
@@ -954,9 +998,19 @@ static int ave_session_begin(struct ave_ctx *ctx)
 		ave_sess_destroy(ctx);
 		return ret;
 	}
-	ret = ave_session_attach_cycled(ctx, &pm_lost);
+	/*
+	 * boot_quiet is already set when an earlier STREAMON on this fd
+	 * failed. Stay silent: the first failure logged the reason.
+	 * attach_cycled sets the flag before it returns, so sample it first.
+	 */
+	{
+		bool already_quiet = READ_ONCE(ave->boot_quiet);
+
+		ret = ave_session_attach_cycled(ctx, &pm_lost);
+		if (ret && !already_quiet)
+			dev_err(ave->dev, "cannot start an encoding session: %d\n", ret);
+	}
 	if (ret) {
-		dev_err(ave->dev, "cannot start an encoding session: %d\n", ret);
 		if (pm_lost)
 			ave_sess_destroy(ctx);
 		else
@@ -1227,12 +1281,16 @@ static int ave_encode_one(struct ave_ctx *ctx)
 		return ret;
 	}
 
-	/* Like macOS: the first frame goes alone, then a Complete. */
-	if (sess->frames == 1) {
+	/*
+	 * Like macOS: the first frame goes alone, then a Complete.
+	 * Without B-frames, every later frame waits too, so one frame
+	 * comes out before the next goes in.
+	 */
+	if (sess->frames == 1 || !sess->p.bframes) {
 		ret = ave_ipc_pump(ave, AVE_FRAME_WAIT_MS, ave_frame_answered, &sess->slot[slot]);
-		if (!ret)
+		if (!ret && sess->frames == 1)
 			ret = ave_cmd_complete(ctx, 1);
-		if (!ret)
+		if (!ret && sess->frames == 1)
 			ret = ave_ipc_settle(ave, AVE_FRAME_WAIT_MS);
 		if (ret)
 			return ret;
@@ -1483,6 +1541,9 @@ static int ave_open(struct file *file)
 	/* Finished frames can be delivered with no new OUTPUT buffer queued. */
 	v4l2_m2m_set_src_buffered(ctx->fh.m2m_ctx, true);
 	v4l2_fh_add(&ctx->fh, file);
+	mutex_lock(&ave->hw_lock);
+	ave->open_count++;
+	mutex_unlock(&ave->hw_lock);
 	return 0;
 
 err_ctrls:
@@ -1503,6 +1564,13 @@ static int ave_release(struct file *file)
 	mutex_unlock(&ave->vdev_lock);
 	cancel_delayed_work_sync(&ctx->poll_work);
 	cancel_work_sync(&ctx->run_work);
+	/* The next open may try a boot that this fd already gave up on. */
+	mutex_lock(&ave->hw_lock);
+	if (ave->open_count)
+		ave->open_count--;
+	if (!ave->open_count)
+		ave->boot_quiet = false;
+	mutex_unlock(&ave->hw_lock);
 	v4l2_ctrl_handler_free(&ctx->hdl);
 	v4l2_fh_del(&ctx->fh, file);
 	v4l2_fh_exit(&ctx->fh);

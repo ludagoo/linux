@@ -36,10 +36,18 @@ struct ave_vb2_mem;
 struct ave_mctf_layout;
 
 /* Frames the firmware can hold at once per session (Process "slots"). */
-/* Firmware rate-control modes in struct ave_params.rc_mode */
+/* Firmware rate-control modes in struct ave_params.rc_mode (9003 wire). */
 #define AVE_RC_CBR 2
 #define AVE_RC_CQ 3
 #define AVE_RC_VBR 4
+/*
+ * 6070 firmware log: "0: AVE_RC_OFF, 1: AVE_RC_ON, 2: AVE_RC_FIXQP".
+ * AVE_RC_CBR is 2 and must not be written on this wire: it selects FIXQP.
+ * CBR and VBR both use ON; the host CBR filler still keys off AVE_RC_CBR.
+ */
+#define AVE_6070_RC_OFF 0
+#define AVE_6070_RC_ON 1
+#define AVE_6070_RC_FIXQP 2
 
 #define AVE_MAX_SLOTS 7
 /* Sessions one firmware boot serves at once (macOS was seen running two). */
@@ -292,6 +300,20 @@ struct ave_dev {
 	 * both until the machine reboots.
 	 */
 	bool fw_norestart;
+	/*
+	 * A failed 6070 start already returned to this open. Further STREAMON
+	 * while the fd is held must not wait out another hello or command.
+	 * Cleared when the last fd closes.
+	 */
+	bool boot_quiet;
+	/*
+	 * One extra runtime PM reference taken after the first successful 6070
+	 * boot. Autosuspend would Halt the firmware, and this SoC's CPU domain
+	 * stays powered under the DARTs, so that Halt cannot be booted again.
+	 * Not dropped from a suspend callback. System sleep still Halts.
+	 */
+	bool fw_keepalive;
+	unsigned int open_count;
 
 	/* hw_lock protects recovery history and quarantined DMA allocations. */
 	struct ave_recovery_history recovery;

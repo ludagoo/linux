@@ -565,6 +565,10 @@ static void ave_remove(struct platform_device *pdev)
 	 * (its domain is shared with the DARTs), so its memory stays.
 	 */
 	pm_runtime_dont_use_autosuspend(ave->dev);
+	if (ave->fw_keepalive) {
+		ave->fw_keepalive = false;
+		pm_runtime_put_noidle(ave->dev);
+	}
 	mutex_lock(&ave->hw_lock);
 	if (ave->fw_state != AVE_FW_OFF) {
 		mutex_unlock(&ave->hw_lock);

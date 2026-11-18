@@ -560,8 +560,12 @@ static bool ave_fw_idle(struct ave_dev *ave)
  * for every session: the encoder must have been runtime suspended in
  * between, which puts the coprocessor back in reset. Hardware runs showed
  * that a restart while it kept power gets no answer, so that is refused
- * (-EAGAIN) and the state stays halted until the power really went. The
- * 9003 code base register must still be set: that ABI uses the loader value.
+ * (-EAGAIN) and the state stays halted until the power really went.
+ * 6070 therefore does not Halt on a confirmed Close: the CPU domain cannot
+ * be power-cycled while the DARTs hold it, and the next session Opens the
+ * firmware that is still running. This path is only for a core that really
+ * was Halted (system sleep, or a Close the firmware did not confirm).
+ * The 9003 code base register must still be set: that ABI uses the loader value.
  */
 static int ave_fw_prepare_restart(struct ave_dev *ave)
 {
@@ -954,6 +958,19 @@ static int ave_fw_boot(struct ave_dev *ave)
 
 	dev_dbg(ave->dev, "firmware running, %u/%u ring slots\n",
 		ave->ring[0].slots, ave->ring[1].slots);
+	/*
+	 * 6070 stays up across a clean Stop+Close. Autosuspend would Halt it
+	 * two seconds after the last session, and that Halt cannot be booted
+	 * again: the CPU domain is held by the DARTs. One reference, taken
+	 * once, keeps runtime PM from doing that. System sleep still Halts
+	 * through ave_suspend(), and this reference is not dropped there.
+	 */
+	if (t->scratch_halt && !ave->fw_keepalive) {
+		pm_runtime_get_noresume(ave->dev);
+		ave->fw_keepalive = true;
+		dev_info(ave->dev, "firmware kept across sessions\n");
+	}
+	ave->boot_quiet = false;
 	return 0;
 }
 
@@ -1053,6 +1070,9 @@ int ave_fw_ensure_running(struct ave_dev *ave)
 				    "Config wedge: refusing to boot until reboot\n");
 		return -ENODEV;
 	}
+	/* The fd is still open after a failed start. Do not touch the core. */
+	if (ave->boot_quiet)
+		return -EIO;
 	ret = ave_fw_check_boot(ave);
 	if (ret)
 		return ret;

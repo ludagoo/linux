@@ -9,6 +9,7 @@
  *
  * Copyright The Aurora Silicon Contributors
  */
+#include <linux/compiler.h>
 #include <linux/crc32.h>
 #include <linux/device.h>
 #include <linux/jiffies.h>
@@ -246,8 +247,11 @@ static int ave_sess_params(struct ave_ctx *ctx, struct ave_params *p)
 		p->limit_bytes = (ctx->bitrate_peak ? max(ctx->bitrate_peak, ctx->bitrate) :
 				  2ULL * ctx->bitrate) / 8;
 	}
-	if (ctx->ave->layout->kind == AVE_LAYOUT_6070 && p->rc_mode != AVE_RC_CQ)
-		return -EOPNOTSUPP;
+	/*
+	 * 6070 CBR and VBR are accepted. ave_start_config writes them as
+	 * AVE_RC_ON (1). Logical AVE_RC_CBR still selects the host filler.
+	 * FIXQP remains the constant-quality path.
+	 */
 
 	level = ave_pick_level(p, p->codec == AVE_CODEC_H264 ? ctx->h264_level :
 							       ctx->hevc_level);
@@ -1093,6 +1097,615 @@ static bool ave_starts_annexb(const u8 *p, size_t len)
 	       (len >= 4 && !p[0] && !p[1] && !p[2] && p[3] == 1);
 }
 
+/* Annex B start code length at @i, or 0. */
+static unsigned int ave_start_code(const u8 *p, size_t len, size_t i)
+{
+	if (i + 4 <= len && !p[i] && !p[i + 1] && !p[i + 2] && p[i + 3] == 1)
+		return 4;
+	if (i + 3 <= len && !p[i] && !p[i + 1] && p[i + 2] == 1)
+		return 3;
+	return 0;
+}
+
+static int ave_bit_get(const u8 *b, size_t nbits, size_t *pos, unsigned int n, u32 *v)
+{
+	u32 x = 0;
+
+	if (!n || n > 32 || *pos + n > nbits)
+		return -1;
+	for (unsigned int i = 0; i < n; i++) {
+		size_t p = *pos + i;
+
+		x = (x << 1) | ((b[p / 8] >> (7 - (p & 7))) & 1);
+	}
+	*pos += n;
+	*v = x;
+	return 0;
+}
+
+static int ave_bit_ue(const u8 *b, size_t nbits, size_t *pos, u32 *v)
+{
+	unsigned int zeros = 0;
+	u32 bit, rest;
+
+	for (;;) {
+		if (ave_bit_get(b, nbits, pos, 1, &bit))
+			return -1;
+		if (bit)
+			break;
+		if (++zeros > 16)
+			return -1;
+	}
+	if (!zeros) {
+		*v = 0;
+		return 0;
+	}
+	if (ave_bit_get(b, nbits, pos, zeros, &rest))
+		return -1;
+	*v = ((1u << zeros) - 1) + rest;
+	return 0;
+}
+
+static int ave_bit_put(u8 *b, size_t cap_bits, size_t *pos, u32 v, unsigned int n)
+{
+	if (!n || n > 32 || *pos + n > cap_bits)
+		return -1;
+	for (unsigned int i = 0; i < n; i++) {
+		size_t p = *pos + i;
+		unsigned int bit = (v >> (n - 1 - i)) & 1;
+
+		if (!bit)
+			b[p / 8] &= ~(1u << (7 - (p & 7)));
+		else
+			b[p / 8] |= 1u << (7 - (p & 7));
+	}
+	*pos += n;
+	return 0;
+}
+
+static int ave_bit_copy(u8 *dst, size_t cap_bits, size_t *dpos, const u8 *src,
+			size_t src_nbits, size_t from, size_t n)
+{
+	size_t s = from;
+
+	for (size_t i = 0; i < n; i++) {
+		u32 bit;
+
+		if (ave_bit_get(src, src_nbits, &s, 1, &bit) ||
+		    ave_bit_put(dst, cap_bits, dpos, bit, 1))
+			return -1;
+	}
+	return 0;
+}
+
+/* RBSP without emulation-prevention bytes. The NAL header is not included. */
+static int ave_rbsp_unescape(const u8 *nal, size_t nal_len, u8 *rbsp, size_t cap,
+			     size_t *rbsp_len)
+{
+	size_t o = 0;
+
+	for (size_t i = 0; i < nal_len; i++) {
+		if (i + 2 < nal_len && !nal[i] && !nal[i + 1] && nal[i + 2] == 3) {
+			if (o + 2 > cap)
+				return -1;
+			rbsp[o++] = 0;
+			rbsp[o++] = 0;
+			i += 2;
+			continue;
+		}
+		if (o >= cap)
+			return -1;
+		rbsp[o++] = nal[i];
+	}
+	*rbsp_len = o;
+	return 0;
+}
+
+static int ave_rbsp_escape(const u8 *rbsp, size_t rbsp_len, u8 *nal, size_t cap,
+			   size_t *nal_len)
+{
+	size_t o = 0;
+	unsigned int zeros = 0;
+
+	for (size_t i = 0; i < rbsp_len; i++) {
+		if (zeros >= 2 && rbsp[i] <= 3) {
+			if (o >= cap)
+				return -1;
+			nal[o++] = 3;
+			zeros = 0;
+		}
+		if (o >= cap)
+			return -1;
+		nal[o++] = rbsp[i];
+		zeros = rbsp[i] ? 0 : zeros + 1;
+	}
+	*nal_len = o;
+	return 0;
+}
+
+/*
+ * Bit index of timing_info_present_flag, and whether VUI is present.
+ * High profile is walked only when its scaling lists are absent.
+ */
+static int ave_h264_timing_bit(const u8 *rbsp, size_t nbytes, size_t *bit, bool *present)
+{
+	size_t nbits = nbytes * 8;
+	size_t pos = 0;
+	u32 profile, v;
+
+	*present = false;
+	if (ave_bit_get(rbsp, nbits, &pos, 8, &profile) ||
+	    ave_bit_get(rbsp, nbits, &pos, 8, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 8, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &v))
+		return -1;
+	if (profile == 100 || profile == 110 || profile == 122 || profile == 244 ||
+	    profile == 44 || profile == 83 || profile == 86 || profile == 118 ||
+	    profile == 128 || profile == 138 || profile == 139 || profile == 134 ||
+	    profile == 135) {
+		u32 chroma;
+
+		if (ave_bit_ue(rbsp, nbits, &pos, &chroma))
+			return -1;
+		if (chroma == 3 && ave_bit_get(rbsp, nbits, &pos, 1, &v))
+			return -1;
+		if (ave_bit_ue(rbsp, nbits, &pos, &v) ||
+		    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+			return -1;
+		if (v)
+			return -1; /* scaling lists: leave the SPS alone */
+	}
+	if (ave_bit_ue(rbsp, nbits, &pos, &v))
+		return -1;
+	if (ave_bit_ue(rbsp, nbits, &pos, &v))
+		return -1;
+	if (v == 0) {
+		if (ave_bit_ue(rbsp, nbits, &pos, &v))
+			return -1;
+	} else if (v != 2) {
+		return -1;
+	}
+	/* max_num_ref_frames, gaps, width, height */
+	if (ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (!v && ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1; /* mb_adaptive_frame_field_flag */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1; /* direct_8x8_inference_flag */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		for (int i = 0; i < 4; i++)
+			if (ave_bit_ue(rbsp, nbits, &pos, &v))
+				return -1;
+	}
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (!v)
+		return 0; /* no VUI: nothing to hang timing on */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		u32 idc;
+
+		if (ave_bit_get(rbsp, nbits, &pos, 8, &idc))
+			return -1;
+		if (idc == 255 &&
+		    (ave_bit_get(rbsp, nbits, &pos, 16, &v) ||
+		     ave_bit_get(rbsp, nbits, &pos, 16, &v)))
+			return -1;
+	}
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v && ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		u32 colour;
+
+		if (ave_bit_get(rbsp, nbits, &pos, 3, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 1, &colour))
+			return -1;
+		if (colour &&
+		    (ave_bit_get(rbsp, nbits, &pos, 8, &v) ||
+		     ave_bit_get(rbsp, nbits, &pos, 8, &v) ||
+		     ave_bit_get(rbsp, nbits, &pos, 8, &v)))
+			return -1;
+	}
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v && (ave_bit_ue(rbsp, nbits, &pos, &v) ||
+		  ave_bit_ue(rbsp, nbits, &pos, &v)))
+		return -1;
+	*bit = pos;
+	*present = true;
+	return 0;
+}
+
+/*
+ * The 6070 firmware emits vui_parameters_present_flag and leaves
+ * timing_info_present_flag clear. A raw Annex B reader then reports 25 fps.
+ * num_units_in_tick = fps_den and time_scale = 2 * fps_num with
+ * fixed_frame_rate_flag make the frame rate fps_num/fps_den (30/1 -> 30).
+ * The SPS is rewritten in the output buffer; the firmware's copy is untouched.
+ * A stream that already carries timing, or one this walk cannot follow, is
+ * left as the firmware wrote it.
+ */
+static void ave_h264_stamp_timing(u8 *buf, size_t room, size_t *len,
+				  u32 fps_num, u32 fps_den)
+{
+	size_t i = 0;
+	u8 rbsp[128], rebuilt[160], escaped[192];
+	size_t rbsp_len, out_bits = 0, esc_len, nal_bits;
+	size_t timing;
+	bool present;
+	u32 flag;
+
+	if (!buf || !len || !*len || *len > room || !fps_num || !fps_den ||
+	    fps_num > U32_MAX / 2)
+		return;
+	while (i + 4 < *len) {
+		unsigned int sc = ave_start_code(buf, *len, i);
+		size_t nal, next, nal_len, new_nal_len, tail, need;
+		u8 hdr;
+
+		if (!sc) {
+			i++;
+			continue;
+		}
+		nal = i + sc;
+		next = nal + 1;
+		while (next < *len && !ave_start_code(buf, *len, next))
+			next++;
+		if (nal >= *len)
+			return;
+		hdr = buf[nal];
+		if ((hdr & 0x1f) != 7) {
+			i = next;
+			continue;
+		}
+		nal_len = next - nal;
+		if (nal_len < 2 ||
+		    ave_rbsp_unescape(buf + nal + 1, nal_len - 1, rbsp, sizeof(rbsp),
+				      &rbsp_len) ||
+		    ave_h264_timing_bit(rbsp, rbsp_len, &timing, &present) ||
+		    !present)
+			return;
+		nal_bits = rbsp_len * 8;
+		if (ave_bit_get(rbsp, nal_bits, &timing, 1, &flag))
+			return;
+		timing--; /* the flag bit itself */
+		if (flag)
+			return; /* firmware already set the clock */
+		memset(rebuilt, 0, sizeof(rebuilt));
+		if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+				 nal_bits, 0, timing) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num * 2, 32) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+		    ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+				 nal_bits, timing + 1, nal_bits - (timing + 1)))
+			return;
+		/* Pad the last byte the way an RBSP ends a NAL. */
+		if (out_bits & 7)
+			out_bits += 8 - (out_bits & 7);
+		if (ave_rbsp_escape(rebuilt, out_bits / 8, escaped, sizeof(escaped),
+				    &esc_len))
+			return;
+		new_nal_len = 1 + esc_len;
+		if (new_nal_len < nal_len)
+			return;
+		need = *len + (new_nal_len - nal_len);
+		if (need > room || i + sc + new_nal_len > room)
+			return;
+		tail = *len - next;
+		if (new_nal_len != nal_len && tail)
+			memmove(buf + nal + new_nal_len, buf + next, tail);
+		buf[nal] = hdr;
+		memcpy(buf + nal + 1, escaped, esc_len);
+		*len = need;
+		return;
+	}
+}
+
+/* One short-term reference picture set. Counts above 16 are refused. */
+static int ave_hevc_rps(const u8 *b, size_t nbits, size_t *pos, unsigned int idx,
+			unsigned int nsets, u8 *nd, unsigned int *nd_n)
+{
+	u32 inter = 0, neg, pos_pics, v = 0, used = 0;
+
+	if (idx && ave_bit_get(b, nbits, pos, 1, &inter))
+		return -1;
+	if (inter) {
+		u32 delta = 0;
+		int ref;
+
+		if (idx == nsets && ave_bit_ue(b, nbits, pos, &delta))
+			return -1;
+		ref = (int)idx - (int)(delta + 1);
+		if (ref < 0 || ref >= (int)*nd_n)
+			return -1;
+		if (ave_bit_get(b, nbits, pos, 1, &v) ||
+		    ave_bit_ue(b, nbits, pos, &v))
+			return -1;
+		for (unsigned int j = 0; j <= nd[ref]; j++) {
+			u32 take;
+
+			if (ave_bit_get(b, nbits, pos, 1, &take))
+				return -1;
+			if (!take && ave_bit_get(b, nbits, pos, 1, &v))
+				return -1;
+			if (take || v)
+				used++;
+		}
+		if (*nd_n >= 16 || used > 255)
+			return -1;
+		nd[(*nd_n)++] = used;
+		return 0;
+	}
+	if (ave_bit_ue(b, nbits, pos, &neg) ||
+	    ave_bit_ue(b, nbits, pos, &pos_pics) ||
+	    neg > 16 || pos_pics > 16)
+		return -1;
+	for (u32 i = 0; i < neg; i++)
+		if (ave_bit_ue(b, nbits, pos, &v) ||
+		    ave_bit_get(b, nbits, pos, 1, &v))
+			return -1;
+	for (u32 i = 0; i < pos_pics; i++)
+		if (ave_bit_ue(b, nbits, pos, &v) ||
+		    ave_bit_get(b, nbits, pos, 1, &v))
+			return -1;
+	if (*nd_n >= 16)
+		return -1;
+	nd[(*nd_n)++] = neg + pos_pics;
+	return 0;
+}
+
+/*
+ * Bit index of vui_timing_info_present_flag. Scaling lists and more than
+ * one temporal sub-layer are left untouched: the walk would be guessing.
+ */
+static int ave_hevc_timing_bit(const u8 *rbsp, size_t nbytes, size_t *bit,
+			       bool *present)
+{
+	size_t nbits = nbytes * 8;
+	size_t pos = 0;
+	u32 v, max_sub, chroma, nsets, log2_poc;
+	u8 nd[16];
+	unsigned int nd_n = 0;
+
+	*present = false;
+	if (ave_bit_get(rbsp, nbits, &pos, 4, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 3, &max_sub) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (max_sub)
+		return -1;
+	/* general profile_tier_level is 96 bits when there are no sub-layers */
+	if (ave_bit_get(rbsp, nbits, &pos, 32, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 32, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 32, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &chroma))
+		return -1;
+	if (chroma == 3 && ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		for (int i = 0; i < 4; i++)
+			if (ave_bit_ue(rbsp, nbits, &pos, &v))
+				return -1;
+	}
+	if (ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+	    ave_bit_ue(rbsp, nbits, &pos, &log2_poc))
+		return -1;
+	if (log2_poc > 12)
+		return -1;
+	log2_poc += 4;
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	{
+		u32 order = v;
+
+		for (u32 i = order ? 0 : max_sub; i <= max_sub; i++)
+			if (ave_bit_ue(rbsp, nbits, &pos, &v) ||
+			    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+			    ave_bit_ue(rbsp, nbits, &pos, &v))
+				return -1;
+	}
+	for (int i = 0; i < 6; i++)
+		if (ave_bit_ue(rbsp, nbits, &pos, &v))
+			return -1;
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v)
+		return -1; /* scaling lists */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		if (ave_bit_get(rbsp, nbits, &pos, 4, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 4, &v) ||
+		    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+		    ave_bit_ue(rbsp, nbits, &pos, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+			return -1;
+	}
+	if (ave_bit_ue(rbsp, nbits, &pos, &nsets) || nsets > 16)
+		return -1;
+	for (u32 i = 0; i < nsets; i++)
+		if (ave_hevc_rps(rbsp, nbits, &pos, i, nsets, nd, &nd_n))
+			return -1;
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		u32 nlt;
+
+		if (ave_bit_ue(rbsp, nbits, &pos, &nlt) || nlt > 16)
+			return -1;
+		for (u32 i = 0; i < nlt; i++)
+			if (ave_bit_get(rbsp, nbits, &pos, log2_poc, &v) ||
+			    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+				return -1;
+	}
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (!v)
+		return 0; /* no VUI */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		u32 idc;
+
+		if (ave_bit_get(rbsp, nbits, &pos, 8, &idc))
+			return -1;
+		if (idc == 255 &&
+		    (ave_bit_get(rbsp, nbits, &pos, 16, &v) ||
+		     ave_bit_get(rbsp, nbits, &pos, 16, &v)))
+			return -1;
+	}
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v && ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1; /* overscan_appropriate_flag */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		u32 colour;
+
+		if (ave_bit_get(rbsp, nbits, &pos, 3, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+		    ave_bit_get(rbsp, nbits, &pos, 1, &colour))
+			return -1;
+		if (colour &&
+		    (ave_bit_get(rbsp, nbits, &pos, 8, &v) ||
+		     ave_bit_get(rbsp, nbits, &pos, 8, &v) ||
+		     ave_bit_get(rbsp, nbits, &pos, 8, &v)))
+			return -1;
+	}
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v && (ave_bit_ue(rbsp, nbits, &pos, &v) ||
+		  ave_bit_ue(rbsp, nbits, &pos, &v)))
+		return -1; /* chroma_sample_loc */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
+	    ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1; /* neutral, field_seq, frame_field_info */
+	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
+		return -1;
+	if (v) {
+		for (int i = 0; i < 4; i++)
+			if (ave_bit_ue(rbsp, nbits, &pos, &v))
+				return -1;
+	}
+	*bit = pos;
+	*present = true;
+	return 0;
+}
+
+/*
+ * Same missing-clock problem as H.264, different syntax. HEVC frame rate is
+ * time_scale / num_units_in_tick with no field-tick halving, so 30/1 is
+ * written as 1 and 30. vui_poc_proportional_to_timing_flag and
+ * vui_hrd_parameters_present_flag stay clear. A raw Annex B reader can still
+ * print 25 fps; an mp4 mux of the same bytes reports the stamped rate.
+ */
+static void ave_hevc_stamp_timing(u8 *buf, size_t room, size_t *len,
+				  u32 fps_num, u32 fps_den)
+{
+	size_t i = 0;
+	u8 rbsp[256], rebuilt[320], escaped[384];
+	size_t rbsp_len, out_bits = 0, esc_len, nal_bits;
+	size_t timing;
+	bool present;
+	u32 flag;
+
+	if (!buf || !len || !*len || *len > room || !fps_num || !fps_den)
+		return;
+	while (i + 4 < *len) {
+		unsigned int sc = ave_start_code(buf, *len, i);
+		size_t nal, next, nal_len, new_nal_len, tail, need;
+		u8 hdr0, hdr1;
+
+		if (!sc) {
+			i++;
+			continue;
+		}
+		nal = i + sc;
+		next = nal + 1;
+		while (next < *len && !ave_start_code(buf, *len, next))
+			next++;
+		if (nal + 1 >= *len)
+			return;
+		hdr0 = buf[nal];
+		hdr1 = buf[nal + 1];
+		if (((hdr0 >> 1) & 0x3f) != 33) {
+			i = next;
+			continue;
+		}
+		nal_len = next - nal;
+		if (nal_len < 3 ||
+		    ave_rbsp_unescape(buf + nal + 2, nal_len - 2, rbsp, sizeof(rbsp),
+				      &rbsp_len) ||
+		    ave_hevc_timing_bit(rbsp, rbsp_len, &timing, &present) ||
+		    !present)
+			return;
+		nal_bits = rbsp_len * 8;
+		if (ave_bit_get(rbsp, nal_bits, &timing, 1, &flag))
+			return;
+		timing--;
+		if (flag)
+			return;
+		memset(rebuilt, 0, sizeof(rebuilt));
+		if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+				 nal_bits, 0, timing) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num, 32) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+		    ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+				 nal_bits, timing + 1, nal_bits - (timing + 1)))
+			return;
+		if (out_bits & 7)
+			out_bits += 8 - (out_bits & 7);
+		if (ave_rbsp_escape(rebuilt, out_bits / 8, escaped, sizeof(escaped),
+				    &esc_len))
+			return;
+		new_nal_len = 2 + esc_len;
+		if (new_nal_len < nal_len)
+			return;
+		need = *len + (new_nal_len - nal_len);
+		if (need > room || i + sc + new_nal_len > room)
+			return;
+		tail = *len - next;
+		if (new_nal_len != nal_len && tail)
+			memmove(buf + nal + new_nal_len, buf + next, tail);
+		buf[nal] = hdr0;
+		buf[nal + 1] = hdr1;
+		memcpy(buf + nal + 2, escaped, esc_len);
+		*len = need;
+		return;
+	}
+}
+
 /* NAL unit types in an Annex B buffer: key frame, parameter sets, filler? */
 static void ave_scan_nals(const u8 *p, size_t len, bool hevc, bool *key, bool *params,
 			  bool *filler)
@@ -1183,13 +1796,18 @@ static size_t ave_sess_cbr_fill(struct ave_ctx *ctx, u8 *out, size_t len, size_t
 	struct ave_session *sess = ctx->sess;
 	const struct ave_params *p = &sess->p;
 	bool hevc = p->codec == AVE_CODEC_HEVC;
-	s64 budget = div_u64((u64)p->bitrate * p->fps_den, 8ULL * p->fps_num);
-	s64 vbv = p->bitrate / 16;	/* 0.5 s of bit rate, in bytes */
-	s64 excess, pad;
+	u32 bitrate;
+	s64 budget, vbv, excess, pad;
 	u8 *f;
 
 	if (p->rc_mode != AVE_RC_CBR)
 		return len;
+	/* s_ctrl updates ctx->bitrate while the session is open. */
+	bitrate = READ_ONCE(ctx->bitrate);
+	if (!bitrate)
+		bitrate = p->bitrate;
+	budget = div_u64((u64)bitrate * p->fps_den, 8ULL * p->fps_num);
+	vbv = bitrate / 16;
 	if (fw_filler && !sess->fw_fills) {
 		sess->fw_fills = true;
 		dev_dbg(ctx->ave->dev, "CBR: the firmware writes filler data\n");
@@ -1327,6 +1945,12 @@ int ave_sess_output(struct ave_ctx *ctx, unsigned int slot, struct vb2_v4l2_buff
 			return -EPROTO;
 		memcpy(out, sess->param_sets.cpu, result.parameter_set_bytes);
 		ps = result.parameter_set_bytes;
+		if (hevc)
+			ave_hevc_stamp_timing(out, room, &ps, sess->p.fps_num,
+					      sess->p.fps_den);
+		else
+			ave_h264_stamp_timing(out, room, &ps, sess->p.fps_num,
+					      sess->p.fps_den);
 	} else if (fw->kind != AVE_LAYOUT_6070) {
 		at = ave_find_params(meta, s->meta.size, hevc);
 		if (at >= 0) {
