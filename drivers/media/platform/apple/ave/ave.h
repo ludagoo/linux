@@ -569,6 +569,7 @@ struct ave_ctx {
 	struct ave_dev *ave;
 	struct v4l2_ctrl_handler hdl;
 	struct v4l2_ctrl *hevc_profile_ctrl;
+	struct v4l2_ctrl *hevc_level_ctrl;
 	bool hevc_profile_auto; /* Main 10 was set by S_FMT, not the client */
 	struct v4l2_pix_format_mplane src_fmt;
 	struct v4l2_pix_format_mplane dst_fmt;
@@ -708,6 +709,7 @@ u32 ave_cq_initial_qp(u32 quality);
 int ave_sess_decode_result(const struct ave_fw_layout *fw, enum ave_codec codec,
 			   const u8 *meta, size_t meta_bytes,
 			   struct ave_frame_result *result);
+int ave_min_hevc_level_index(struct ave_ctx *ctx);
 struct ave_session *ave_sess_create(struct ave_ctx *ctx);
 void ave_sess_destroy(struct ave_ctx *ctx);
 void ave_sess_reap(struct ave_dev *ave);

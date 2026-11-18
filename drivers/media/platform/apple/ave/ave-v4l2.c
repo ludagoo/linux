@@ -279,6 +279,8 @@ static int ave_try_fmt_out(struct file *file, void *priv, struct v4l2_format *f)
  * that S_FMT chose; one the client set stays and is refused at STREAMON,
  * as is Main set after S_FMT on P010.
  */
+static void ave_publish_hevc_level(struct ave_ctx *ctx);
+
 static void ave_sync_hevc_profile(struct ave_ctx *ctx)
 {
 	/* Only HEVC takes P010, so with H.264 this only undoes an automatic Main 10. */
@@ -323,6 +325,7 @@ static int ave_s_fmt_cap(struct file *file, void *priv, struct v4l2_format *f)
 	if (!raw_ok)
 		ave_fill_raw(ctx->ave, &ctx->src_fmt, pix->pixelformat);
 	ave_sync_hevc_profile(ctx);
+	ave_publish_hevc_level(ctx);
 	return 0;
 }
 
@@ -349,6 +352,7 @@ static int ave_s_fmt_out(struct file *file, void *priv, struct v4l2_format *f)
 	ctx->dst_fmt.ycbcr_enc = pix->ycbcr_enc;
 	ctx->dst_fmt.quantization = pix->quantization;
 	ave_fill_coded(&ctx->dst_fmt);
+	ave_publish_hevc_level(ctx);
 	return 0;
 }
 
@@ -380,11 +384,64 @@ static int ave_s_selection(struct file *file, void *priv, struct v4l2_selection 
 	return 0;
 }
 
+static bool ave_parm_ok(u32 type)
+{
+	switch (type) {
+	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
+	case V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE:
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* Process repeats fps_int and the fps float on every frame. */
+static void ave_live_fps(struct ave_ctx *ctx)
+{
+	struct ave_session *sess = ctx->sess;
+	u32 num, den, fps;
+
+	if (!sess)
+		return;
+	num = ctx->timeperframe.denominator;
+	den = ctx->timeperframe.numerator;
+	if (!num || !den)
+		return;
+	fps = max_t(u32, DIV_ROUND_CLOSEST(num, den), 1);
+	WRITE_ONCE(sess->p.fps_num, num);
+	WRITE_ONCE(sess->p.fps_den, den);
+	WRITE_ONCE(sess->p.fps_int, fps);
+}
+
+/*
+ * The firmware SPS already uses the lowest level that fits. Raise the
+ * control to that when the client left it lower, so G_CTRL matches the
+ * stream. A higher request stays. Not called from s_ctrl.
+ */
+static void ave_publish_hevc_level(struct ave_ctx *ctx)
+{
+	s32 min_idx, cur;
+
+	if (!ctx->hevc_level_ctrl)
+		return;
+	min_idx = ave_min_hevc_level_index(ctx);
+	cur = v4l2_ctrl_g_ctrl(ctx->hevc_level_ctrl);
+	if (cur < min_idx)
+		v4l2_ctrl_s_ctrl(ctx->hevc_level_ctrl, min_idx);
+}
+
 static int ave_g_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 {
 	struct ave_ctx *ctx = ave_file_to_ctx(file);
 
-	if (!V4L2_TYPE_IS_OUTPUT(a->type))
+	/*
+	 * v4l2-ctl --get-parm uses VIDEO_CAPTURE. timeperframe sits at the
+	 * same offsets in the output and capture parm unions. Chromium sets
+	 * OUTPUT_MPLANE.
+	 */
+	if (!ave_parm_ok(a->type))
 		return -EINVAL;
 	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
 	a->parm.output.timeperframe = ctx->timeperframe;
@@ -396,7 +453,7 @@ static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 	struct ave_ctx *ctx = ave_file_to_ctx(file);
 	struct v4l2_fract *t = &a->parm.output.timeperframe;
 
-	if (!V4L2_TYPE_IS_OUTPUT(a->type))
+	if (!ave_parm_ok(a->type))
 		return -EINVAL;
 	if (!t->numerator || !t->denominator)
 		*t = ctx->timeperframe;
@@ -407,6 +464,8 @@ static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 		*t = (struct v4l2_fract){ 1, 1 };
 	ctx->timeperframe = *t;
 	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
+	ave_live_fps(ctx);
+	ave_publish_hevc_level(ctx);
 	return 0;
 }
 
@@ -675,9 +734,10 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 					       V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN,
 					       ~BIT(V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN),
 					       V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN);
-	v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_LEVEL,
-			       V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1, 0,
-			       V4L2_MPEG_VIDEO_HEVC_LEVEL_1);
+	ctx->hevc_level_ctrl =
+		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_LEVEL,
+				       V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1, 0,
+				       V4L2_MPEG_VIDEO_HEVC_LEVEL_1);
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP, 0, 51, 1, 0);
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP, 0, 51, 1, 51);
 
@@ -1017,6 +1077,7 @@ static int ave_session_begin(struct ave_ctx *ctx)
 	    READ_ONCE(ave->fw_state) == AVE_FW_BROKEN ||
 	    READ_ONCE(ave->fw_state) == AVE_FW_RECOVERING)
 		pm_runtime_suspend(ave->dev);
+	ave_publish_hevc_level(ctx);
 	sess = ave_sess_create(ctx);
 	if (IS_ERR(sess)) {
 		dev_err(ave->dev, "cannot set up a session: %ld\n", PTR_ERR(sess));
@@ -1581,6 +1642,7 @@ static int ave_open(struct file *file)
 	ret = ave_init_ctrls(ctx);
 	if (ret)
 		goto err_fh;
+	ave_publish_hevc_level(ctx);
 
 	ctx->fh.m2m_ctx = v4l2_m2m_ctx_init(ave->m2m_dev, ctx, ave_queue_init);
 	if (IS_ERR(ctx->fh.m2m_ctx)) {
