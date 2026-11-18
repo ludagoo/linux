@@ -429,13 +429,21 @@ static int ave_encoder_cmd(struct file *file, void *priv, struct v4l2_encoder_cm
 		return 0;
 
 	if (ec->cmd == V4L2_ENC_CMD_STOP) {
-		if (ctx->draining || ctx->stopped)
+		/*
+		 * v4l2_update_last_buf_state(): a second STOP while the
+		 * drain is still in progress is EBUSY. STOP after the
+		 * encoder has already stopped does nothing.
+		 */
+		if (ctx->draining && !ctx->stopped)
+			return -EBUSY;
+		if (ctx->stopped)
 			return 0;
 		ctx->drain_src = v4l2_m2m_last_src_buf(m2m);
 		ctx->draining = true;
 		if (!ctx->drain_src)
 			WRITE_ONCE(ctx->flush_pending, true);
 	} else {
+		/* START is EBUSY until the drain has published stopped. */
 		if (ctx->draining && !ctx->stopped)
 			return -EBUSY;
 		ctx->draining = false;
@@ -500,7 +508,17 @@ static int ave_s_ctrl(struct v4l2_ctrl *ctrl)
 		ctx->bitrate_mode = ctrl->val;
 		break;
 	case V4L2_CID_MPEG_VIDEO_CONSTANT_QUALITY:
-		ctx->quality = ctrl->val;
+		WRITE_ONCE(ctx->quality, ctrl->val);
+		smp_store_release(&ctx->quality_set, 1);
+		break;
+	case V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE:
+		/*
+		 * Chromium's V4L2 encoder treats this as the one mandatory
+		 * control and fails the session if it is missing. The mode
+		 * the firmware is given is still bitrate_mode, which Chromium
+		 * sets to CBR on the next control.
+		 */
+		ctx->frame_rc = ctrl->val;
 		break;
 	case V4L2_CID_MPEG_VIDEO_BITRATE:
 		WRITE_ONCE(ctx->bitrate, ctrl->val);
@@ -574,7 +592,7 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 	const struct v4l2_ctrl_ops *ops = &ave_ctrl_ops;
 	struct v4l2_ctrl *c;
 
-	v4l2_ctrl_handler_init(hdl, 19);
+	v4l2_ctrl_handler_init(hdl, 20);
 
 	/*
 	 * 6070 constant quality stays the default, so a client that never
@@ -595,6 +613,12 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 				       V4L2_MPEG_VIDEO_BITRATE_MODE_VBR);
 	/* Constant quality: 100 is the best; same scale as VideoToolbox's 0.0-1.0. */
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_CONSTANT_QUALITY, 0, 100, 1, 50);
+	/*
+	 * Frame-level rate control. Chromium refuses to encode without it.
+	 * Default on matches a bitrate-mode client; constant quality ignores it
+	 * and keeps FIXQP.
+	 */
+	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_FRAME_RC_ENABLE, 0, 1, 1, 1);
 	v4l2_ctrl_new_std(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE, 100000, 100000000, 1,
 			  4000000);
 	/*
@@ -720,6 +744,13 @@ static int ave_buf_prepare(struct vb2_buffer *vb)
 
 	if (vb2_plane_size(vb, 0) < f->plane_fmt[0].sizeimage)
 		return -EINVAL;
+	if (vb->vb2_queue->memory == VB2_MEMORY_USERPTR &&
+	    V4L2_TYPE_IS_OUTPUT(vb->type)) {
+		int copied = ave_vb2_sync_userptr(vb);
+
+		if (copied)
+			return copied;
+	}
 	/* Keep what the client filled in, so its layout can be checked. */
 	if (V4L2_TYPE_IS_OUTPUT(vb->type) && !vb2_get_plane_payload(vb, 0))
 		vb2_set_plane_payload(vb, 0, f->plane_fmt[0].sizeimage);
@@ -1131,7 +1162,7 @@ static int ave_queue_init(void *priv, struct vb2_queue *src, struct vb2_queue *d
 	int ret;
 
 	src->type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	src->io_modes = VB2_MMAP | VB2_DMABUF;
+	src->io_modes = VB2_MMAP | VB2_DMABUF | VB2_USERPTR;
 	src->drv_priv = ctx;
 	src->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
 	src->ops = &ave_qops;
@@ -1180,6 +1211,20 @@ static int ave_job_ready(void *priv)
 }
 
 /*
+ * The LAST buffer is what tells the client the drain finished. stopped
+ * has to be visible before that buffer is done: Chromium dequeues LAST
+ * and issues VIDIOC_ENCODER_CMD START immediately, and START is EBUSY
+ * while draining && !stopped. Publishing after buf_done loses that race
+ * because ave_session_free() still runs before the old flag store.
+ */
+static void ave_mark_drain_stopped(struct ave_ctx *ctx)
+{
+	ctx->draining = false;
+	WRITE_ONCE(ctx->flush_pending, false);
+	ctx->stopped = true;
+}
+
+/*
  * Hand finished frames, in bitstream order, to CAPTURE buffers. Returns
  * true when the frame that ends a drain went out (with the LAST flag).
  */
@@ -1219,6 +1264,7 @@ static bool ave_deliver(struct ave_ctx *ctx)
 		if (READ_ONCE(ctx->flush_pending) && !sess->fw_open && !sess->done_count) {
 			dst->flags |= V4L2_BUF_FLAG_LAST;
 			last = true;
+			ave_mark_drain_stopped(ctx);
 		}
 		ave_vb2_put(s->input_mem);
 		s->input_mem = NULL;
@@ -1335,6 +1381,7 @@ static bool ave_finish_drain(struct ave_ctx *ctx)
 	vb2_set_plane_payload(&dst->vb2_buf, 0, 0);
 	dst->flags |= V4L2_BUF_FLAG_LAST;
 	dst->sequence = ctx->dst_sequence++;
+	ave_mark_drain_stopped(ctx);
 	v4l2_m2m_buf_done(dst, VB2_BUF_STATE_DONE);
 	return true;
 }
@@ -1417,10 +1464,12 @@ static void ave_run_work(struct work_struct *work)
 	if (ret) {
 		ave_job_fail(ctx, ret);
 	} else if (eos) {
+		/*
+		 * stopped was published before LAST was done. A START may
+		 * already have cleared it; setting it again would undo the
+		 * resume.
+		 */
 		ave_session_free(ctx);
-		ctx->draining = false;
-		WRITE_ONCE(ctx->flush_pending, false);
-		ctx->stopped = true;
 		v4l2_event_queue_fh(&ctx->fh, &ave_eos_event);
 	} else if (poll) {
 		mod_delayed_work(ave->wq, &ctx->poll_work, msecs_to_jiffies(AVE_WATCH_MS));

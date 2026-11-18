@@ -911,6 +911,41 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 			       fw->kind == AVE_LAYOUT_6070 ? 0 : p->bframes);
 		ave_start_put8(cmd, l->h264_pixel_packing, 1);
 		/*
+		 * bSkipThrdEn at host 0xfce6. Zero programs pipe words
+		 * 0x4004 and 0x2005 and writes skip thresholds of 256.
+		 * One skips that program and writes 64/128/192 instead.
+		 * Only the 6070 command has this byte here.
+		 */
+		if (fw->kind == AVE_LAYOUT_6070)
+			ave_start_put8(cmd, 0xfce6, 1);
+		/*
+		 * MD_InterLambda at host 0xffa4. 6070 init copies the
+		 * word at command+0xff44 to controller+0xb1c, and the
+		 * AVC pipe store is (host * (qp_lambda<<4) + 0x200) >> 10.
+		 * Zero writes a pipe lambda of 0, so inter mode decision
+		 * prices motion at nothing. 64 makes the pipe word the
+		 * QP lambda table (64 at QP 48).
+		 *
+		 * MD_IntraLambda at host 0xffa8 lands at controller+0xb20.
+		 * The pipe store at 0x562f4 uses the same formula. With
+		 * only the inter word set, later P frames were still about
+		 * half intra 16x16. 64 gives intra the QP lambda table too.
+		 * That raised skip at QP 48 and did not move quality 50.
+		 *
+		 * ME_FullPelLambda at host 0xff98 lands at controller+0xb10.
+		 * 0x55e80 uses the same formula. Sub-pel, low-res, and the
+		 * intra offset stay 0.
+		 *
+		 * Host 64 makes the pipe word the SAD table. That removed
+		 * the 8x8 floor and left quality 50 about 5.6x libx264.
+		 * 256 makes the inter pipe word four times the SAD table.
+		 */
+		if (fw->kind == AVE_LAYOUT_6070) {
+			ave_start_put32(cmd, 0xff98, 64);
+			ave_start_put32(cmd, 0xffa4, 256);
+			ave_start_put32(cmd, 0xffa8, 64);
+		}
+		/*
 		 * 6070.11.1 stores rc_310 and the transform mode in the same
 		 * word (0xfcec). Writing the Main-profile transform value 0
 		 * on top of the non-CQ word 30 made 1 Mbit and 2.5 Mbit
@@ -922,8 +957,20 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 		      l->h264_transform_mode == l->rc_310))
 			ave_start_put32(cmd, l->h264_transform_mode,
 					p->high ? 2 : 0);
+		/*
+		 * 6070 copies this halfword to EncCommParams.skip_mode
+		 * (controller+0x121e). Bit 0 is written beside
+		 * AVC_RECONLCONFIG_SKIPMODE and bit 1 beside
+		 * AVC_RECONCCONFIG_SKIPMODE. The legend is 0 normal,
+		 * 1 natural skip, 2 adaptive. AVE_AVC_RECON_SKIP_MODE (3)
+		 * sets both bits. On lecture720 CQ that left later P frames
+		 * at about 94% 8x8 and 2% skip, which is an 8 Mbit/s floor
+		 * at slice QP 48. The SKIPMODE register itself is the low
+		 * 2 bits of the transform word and is already 0 on CQ.
+		 * Only the 6070 H.264 layout has this field.
+		 */
 		if (l->h264_skip_mode)
-			ave_put16(cmd, l->h264_skip_mode, AVE_AVC_RECON_SKIP_MODE);
+			ave_put16(cmd, l->h264_skip_mode, 0);
 		ave_start_put32(cmd, l->h264_input_bit_depth, depth);
 		ave_start_put32(cmd, l->h264_parameter_set_count, 1);
 		ave_start_put32(cmd, l->h264_slice_map_count, 1);
@@ -1205,6 +1252,14 @@ int ave_build_process(struct ave_ctx *ctx, u8 *cmd, size_t len,
 			       sess->codec_state + part->state_offset, part->bytes);
 		}
 		pic = ave_6070_picture(p, sess->frames, force_key, last);
+		/*
+		 * Constant quality publishes one slice QP at Start. A later
+		 * S_CTRL of CONSTANT_QUALITY has to reach the next frame.
+		 * FIXQP leaves the process slice delta alone; CBR overwrites
+		 * it. The delta written below is what the next picture uses.
+		 */
+		if (p->rc_mode == AVE_RC_CQ && smp_load_acquire(&ctx->quality_set))
+			sess->p.initial_qp = ave_cq_initial_qp(READ_ONCE(ctx->quality));
 		if (p->codec == AVE_CODEC_H264) {
 			ave_6070_avc_slice(cmd + l->retained[0].command_offset, p,
 					   &pic, sess->frames);
@@ -1335,7 +1390,18 @@ int ave_build_process(struct ave_ctx *ctx, u8 *cmd, size_t len,
 	else
 		ave_put32(cmd, l->const5, 5);
 	ave_put64(cmd, l->fps, ave_f64(p->fps_num, p->fps_den));
-	ave_put64(cmd, l->timescale, AVE_PROC_TIMESCALE);
+	/*
+	 * 6070 H.264 copies the low 32 bits of this word into the per-frame
+	 * rate-control record (slot + 0x16c0). Nonzero takes the float path in
+	 * the non-reference predicate and that path returns non-reference for
+	 * every P picture, so PrepareSliceHeader writes nal_ref_idc 0. Zero
+	 * takes the simple path, which returns reference. PTS above still uses
+	 * AVE_PROC_TIMESCALE. HEVC reads a different process offset.
+	 */
+	if (fw->kind == AVE_LAYOUT_6070 && p->codec == AVE_CODEC_H264)
+		ave_put64(cmd, l->timescale, 0);
+	else
+		ave_put64(cmd, l->timescale, AVE_PROC_TIMESCALE);
 	if (l->crop)
 		ave_put32(cmd, l->crop,
 			  p->cw != p->width || p->ch != p->height);
