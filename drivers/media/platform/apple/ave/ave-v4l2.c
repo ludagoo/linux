@@ -401,17 +401,14 @@ static bool ave_parm_ok(u32 type)
 static void ave_live_fps(struct ave_ctx *ctx)
 {
 	struct ave_session *sess = ctx->sess;
-	u32 num, den, fps;
+	u32 fps;
 
 	if (!sess)
 		return;
-	num = ctx->timeperframe.denominator;
-	den = ctx->timeperframe.numerator;
-	if (!num || !den)
-		return;
-	fps = max_t(u32, DIV_ROUND_CLOSEST(num, den), 1);
-	WRITE_ONCE(sess->p.fps_num, num);
-	WRITE_ONCE(sess->p.fps_den, den);
+	fps = ave_fps_reduce(ctx->timeperframe.numerator,
+			     ctx->timeperframe.denominator);
+	WRITE_ONCE(sess->p.fps_num, fps);
+	WRITE_ONCE(sess->p.fps_den, 1);
 	WRITE_ONCE(sess->p.fps_int, fps);
 }
 
@@ -459,13 +456,16 @@ static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 
 	if (!ave_parm_ok(a->type))
 		return -EINVAL;
+	/*
+	 * Keep the reduced 1/fps fraction. G_PARM, the level check and the
+	 * VUI then see 30/1 rather than the 1000/30000 v4l2-ctl sends.
+	 */
 	if (!t->numerator || !t->denominator)
 		*t = ctx->timeperframe;
-	/* 1 to 240 frames per second. */
-	if ((u64)t->denominator > (u64)t->numerator * 240)
-		*t = (struct v4l2_fract){ 1, 240 };
-	if (t->numerator > t->denominator)
-		*t = (struct v4l2_fract){ 1, 1 };
+	else
+		*t = (struct v4l2_fract){
+			1, ave_fps_reduce(t->numerator, t->denominator)
+		};
 	ctx->timeperframe = *t;
 	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
 	ave_live_fps(ctx);
@@ -660,8 +660,9 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 	/*
 	 * 6070 constant quality stays the default, so a client that never
 	 * sets the mode still gets the session that encodes. CBR and VBR are
-	 * offered as well: both are firmware rate-control ON, and CBR is
-	 * padded on the host. 9003 keeps VBR as its default.
+	 * offered as well: both are firmware rate-control ON. Host CBR
+	 * filler is off unless the cbr_pad module parameter is set.
+	 * 9003 keeps VBR as its default.
 	 */
 	if (ctx->ave->layout && ctx->ave->layout->kind == AVE_LAYOUT_6070)
 		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
