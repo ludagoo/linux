@@ -382,11 +382,17 @@ static void ave_6070_images(struct kunit *test)
 		};
 
 		ave->variant = &direct;
+		ave->config_shared.cpu = ave;
+		ave->config_shared.dma = 0x100000000ULL;
+		ave->config_shared.size = SZ_64K;
 		memset(actual, 0, sizeof(actual));
 		abi->write_config(ave, actual);
 		ave_stamp_command(abi, actual, 3000000, 0x123456);
 		expected[0x40] = 1;
+		put_unaligned_le64(0x100000000ULL, expected + 0x60);
+		put_unaligned_le32(SZ_64K, expected + 0x68);
 		KUNIT_EXPECT_MEMEQ(test, actual, expected, sizeof(actual));
+		ave->config_shared.cpu = NULL;
 		ave->variant = NULL;
 	}
 	for (unsigned int codec = AVE_CODEC_H264; codec <= AVE_CODEC_HEVC;

@@ -313,6 +313,12 @@ struct ave_dev {
 	dma_addr_t extra0_dma;
 	size_t extra0_map_size;
 	bool extra0_mapped;
+	/*
+	 * H14C Config shared area (command +0x60/+0x68). AddSharedMemory
+	 * asserts on a zero size when the IPC manager's group count is not 1.
+	 * 16 KiB aligned in the DART. Allocated only for config_direct.
+	 */
+	struct ave_buf config_shared;
 	bool module_pinned;
 	/* A 6070 lifecycle command is serialized per logical operation. */
 	struct ave_reply expected[AVE_OP_COUNT];

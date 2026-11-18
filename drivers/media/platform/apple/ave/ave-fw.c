@@ -531,6 +531,7 @@ static int ave_fw_map_extra0(struct ave_dev *ave)
 void ave_fw_remove(struct ave_dev *ave)
 {
 	ave_fw_release_boot(ave);
+	ave_free(ave, &ave->config_shared);
 	vfree(ave->data_pristine);
 	ave->data_pristine = NULL;
 }
@@ -766,6 +767,13 @@ static int ave_fw_boot(struct ave_dev *ave)
 		ret = ave_alloc(ave, &ave->log, AVE_LOG_BYTES, 0);
 	if (!ret)
 		ret = ave_fw_map_extra0(ave);
+	/*
+	 * 64 KiB is four pipe slots of 0xab8+0x800 after a group divisor of
+	 * 4, and still enough when the divisor is 2. The DART IOVA is what
+	 * RTK_mc_register_remote maps.
+	 */
+	if (!ret && ave->variant->config_direct)
+		ret = ave_alloc(ave, &ave->config_shared, SZ_64K, 0);
 	if (ret)
 		return ret;
 

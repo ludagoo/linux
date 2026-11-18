@@ -42,9 +42,11 @@ int ave_cmd_config(struct ave_dev *ave)
 	 * Mcpu construction; 0x41 requests it when 0x40 is clear.
 	 */
 	dev_info(ave->dev,
-		 "Config submitted: %u bytes extra0 %#llx flags %02x %02x (buf %d)\n",
+		 "Config submitted: %u bytes extra0 %#llx flags %02x %02x shared %#llx/%#x (buf %d)\n",
 		 len, (unsigned long long)ave->extra0_dma,
-		 len > 0x40 ? cmd[0x40] : 0, len > 0x41 ? cmd[0x41] : 0, buf);
+		 len > 0x40 ? cmd[0x40] : 0, len > 0x41 ? cmd[0x41] : 0,
+		 len > 0x67 ? get_unaligned_le64(cmd + 0x60) : 0,
+		 len > 0x6b ? get_unaligned_le32(cmd + 0x68) : 0, buf);
 	ret = ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
 	if (!ret)
 		dev_info(ave->dev, "Config answered\n");
