@@ -630,6 +630,12 @@ static void ave_6070_start_process_fields(struct kunit *test)
 			KUNIT_EXPECT_EQ(test, get_unaligned_le32(start + sl->max_b), 1U);
 			KUNIT_EXPECT_EQ(test,
 					get_unaligned_le32(start + sl->idr_interval), 30U);
+			/* CQ leaves the neighbour pointers and the RC flag at 0. */
+			KUNIT_EXPECT_EQ(test,
+					get_unaligned_le64(start + sl->neighbour_fw.address),
+					sess->neighbour_fw[0].dma);
+			KUNIT_EXPECT_EQ(test,
+					get_unaligned_le32(start + sl->rc_param_flag), 0U);
 			KUNIT_EXPECT_EQ(test, start[sl->ref_compression], 1U);
 			if (codec == AVE_CODEC_H264) {
 				KUNIT_EXPECT_EQ(test,
@@ -740,10 +746,51 @@ static void ave_6070_start_process_fields(struct kunit *test)
 						ave_build_start(ctx, start, start_len), 0);
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le32(start + sl->rc_310), 30U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_bitrate),
+						4000000U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_idr), 30U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_reorder), 0U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_frames), 0U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_avg_fps), 30U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_fps), 30U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_flag), 1U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le64(start + sl->rc_param_bitrate + 8),
+						0ULL);
+				KUNIT_EXPECT_NE(test,
+						get_unaligned_le64(start +
+								   sl->neighbour_fw.address),
+						sess->neighbour_fw[0].dma);
+				sess->p.gop = 1;
+				memset(start, 0, 0x32dc8);
+				KUNIT_ASSERT_EQ(test,
+						ave_build_start(ctx, start, start_len), 0);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_idr), 0U);
+				sess->p.gop = 30;
+				sess->p.rc_mode = AVE_RC_VBR;
+				memset(start, 0, 0x32dc8);
+				KUNIT_ASSERT_EQ(test,
+						ave_build_start(ctx, start, start_len), 0);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_bitrate),
+						4000000U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_flag), 1U);
 				sess->p.rc_mode = AVE_RC_CQ;
 				memset(start, 0, 0x32dc8);
 				KUNIT_ASSERT_EQ(test,
 						ave_build_start(ctx, start, start_len), 0);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le64(start + sl->neighbour_fw.address),
+						sess->neighbour_fw[0].dma);
 				KUNIT_EXPECT_EQ(test, start[sl->ref_compression], 1U);
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le64(start + sl->recon.address),
@@ -751,6 +798,49 @@ static void ave_6070_start_process_fields(struct kunit *test)
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le64(start + sl->recon.address + 8),
 						sess->ref_a[0].dma + 0x313800);
+			}
+
+			/*
+			 * HEVC non-CQ writes the same scalars and leaves ui32RCFlag
+			 * at 0. command+0xfec4 is still 0, so CRateControl::Init
+			 * stays skipped and the picture slot keeps command+0xff30.
+			 */
+			if (codec == AVE_CODEC_HEVC && !size) {
+				sess->p.rc_mode = AVE_RC_CBR;
+				memset(start, 0, 0x32dc8);
+				KUNIT_ASSERT_EQ(test,
+						ave_build_start(ctx, start, start_len), 0);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_bitrate),
+						4000000U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->bitrate),
+						4000000U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_idr), 30U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_reorder), 1U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_avg_fps), 30U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_fps), 30U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_flag), 0U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_310), 30U);
+				KUNIT_EXPECT_NE(test,
+						get_unaligned_le64(start +
+								   sl->neighbour_fw.address),
+						sess->neighbour_fw[0].dma);
+				sess->p.rc_mode = AVE_RC_CQ;
+				memset(start, 0, 0x32dc8);
+				KUNIT_ASSERT_EQ(test,
+						ave_build_start(ctx, start, start_len), 0);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le64(start + sl->neighbour_fw.address),
+						sess->neighbour_fw[0].dma);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->rc_param_flag), 0U);
 			}
 
 			slot = sess->p.slots - 1;

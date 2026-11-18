@@ -194,8 +194,20 @@ int ave_cmd_start(struct ave_ctx *ctx)
 			     true);
 	if (ret)
 		return ret;
-	dev_info(ave->dev, "Start submitted: %zu bytes rc %u bitrate %u\n",
-		 len, p->rc_mode, p->bitrate);
+	if (fw->kind == AVE_LAYOUT_6070) {
+		const struct ave_start_layout *sl = &fw->start[p->codec - 1];
+
+		dev_info(ave->dev,
+			 "Start submitted: %zu bytes rc %u bitrate %u ui32Bitrate %u expected_fps %u rc_flag %u\n",
+			 len, p->rc_mode, p->bitrate,
+			 get_unaligned_le32(cmd + sl->rc_param_bitrate),
+			 get_unaligned_le32(cmd + sl->rc_param_fps),
+			 get_unaligned_le32(cmd + sl->rc_param_flag));
+	} else {
+		dev_info(ave->dev,
+			 "Start submitted: %zu bytes rc %u bitrate %u\n",
+			 len, p->rc_mode, p->bitrate);
+	}
 	ret = ave_ipc_settle(ave, AVE_START_WAIT_MS);
 	if (!ret)
 		dev_info(ave->dev, "Start answered\n");

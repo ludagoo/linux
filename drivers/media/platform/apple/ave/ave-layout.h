@@ -159,6 +159,20 @@ struct ave_start_layout {
 	u32 min_qp2;
 	u32 max_qp2;
 	u32 rc_310;
+	/*
+	 * 6070 pRCParams at command+0xfed0. The firmware names ui32Bitrate,
+	 * ui32IdrPeriod, bAllowFrameReordering, TotalNumberOfFrames, the two
+	 * frame-rate words, and ui32RCFlag (0 off, 1 on, 2 fixed QP). Zero
+	 * on every other layout. neighbour_fw occupies the same bytes and
+	 * is overwritten for non-CQ only.
+	 */
+	u32 rc_param_bitrate;
+	u32 rc_param_idr;
+	u32 rc_param_reorder;
+	u32 rc_param_frames;
+	u32 rc_param_avg_fps;
+	u32 rc_param_fps;
+	u32 rc_param_flag;
 	u32 size_class;
 	u32 coded_w;
 	u32 coded_h;

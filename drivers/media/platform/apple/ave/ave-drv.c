@@ -390,14 +390,20 @@ static void ave_debugfs_init(struct ave_dev *ave)
 		return;
 	scnprintf(name, sizeof(name), "apple-ave-%s", dev_name(ave->dev));
 	ave->debugfs = debugfs_create_dir(name, NULL);
-	if (ave->layout->abi == &ave_abi_6070) {
+	/*
+	 * 6070 keeps lifecycle_test and the command blobs. inject_wedge and
+	 * the DART audit stay off that firmware: a wedge schedules recovery
+	 * on a core a meeting may be using.
+	 */
+	if (ave->layout->abi == &ave_abi_6070)
 		debugfs_create_file("lifecycle_test", 0200, ave->debugfs, ave,
 				    &ave_lifecycle_fops);
-		return;
+	else {
+		debugfs_create_file("inject_wedge", 0200, ave->debugfs, ave,
+				    &ave_inject_wedge_fops);
+		debugfs_create_file("dart_audit", 0400, ave->debugfs, ave,
+				    &ave_dart_audit_fops);
 	}
-	debugfs_create_file("inject_wedge", 0200, ave->debugfs, ave,
-			    &ave_inject_wedge_fops);
-	debugfs_create_file("dart_audit", 0400, ave->debugfs, ave, &ave_dart_audit_fops);
 	for (unsigned int c = 0; c < 2; c++)
 		for (unsigned int k = 0; k < AVE_IMAGE_COUNT; k++) {
 			struct debugfs_blob_wrapper *blob;
@@ -416,7 +422,8 @@ static void ave_debugfs_init(struct ave_dev *ave)
 			debugfs_create_blob(names[c][k], 0400, ave->debugfs,
 					    blob);
 		}
-	ave_debugfs_mctf(ave);
+	if (ave->layout->abi != &ave_abi_6070)
+		ave_debugfs_mctf(ave);
 }
 
 /*
