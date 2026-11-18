@@ -250,11 +250,11 @@ struct ave_variant {
 	/* Register sequence and boot/hello configuration have been qualified. */
 	bool boot_qualified;
 	/*
-	 * H14C ProcessConfig: command byte 0x40 nonzero skips
-	 * McpuControllerCreate and the later Mcpu calls, then runs
-	 * ProcessChipReset. Clear (with byte 0x41 set) constructs that
-	 * controller first. Its CIOObject::Spawn is an assert path, and an
-	 * assert spins without a reply. Set on t6021.
+	 * t6021 Config allocates the H14C shared area and leaves command
+	 * byte 0x40 clear. With byte 0x41 set, ProcessConfig constructs
+	 * CAVEPipeMcpuController and, on success, continues into
+	 * AddSharedMemory. A set 0x40 skips that constructor: the pipe FSM
+	 * can still reach its start state while the hardware pipe never runs.
 	 */
 	bool config_direct;
 };

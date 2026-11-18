@@ -24,7 +24,7 @@ int ave_cmd_config(struct ave_dev *ave)
 {
 	int buf = ave_ipc_scalar_buf(ave);
 	u32 len = ave->layout->abi->scalar_bytes[AVE_OP_CONFIG];
-	u8 *cmd;
+	u8 *cmd, flag40, flag41;
 	int ret;
 
 	if (buf < 0)
@@ -38,15 +38,18 @@ int ave_cmd_config(struct ave_dev *ave)
 		return ret;
 	/*
 	 * Queued, not acknowledged. Settle waits for the ack and the reply.
-	 * flags are command bytes +0x40 and +0x41. On 6070, a set 0x40 skips
-	 * Mcpu construction; 0x41 requests it when 0x40 is clear.
+	 * flags are command bytes +0x40 and +0x41. mcpu is 1 when 0x40 is
+	 * clear and 0x41 is set: H14C then builds CAVEPipeMcpuController
+	 * before AddSharedMemory.
 	 */
+	flag40 = len > 0x40 ? cmd[0x40] : 0;
+	flag41 = len > 0x41 ? cmd[0x41] : 0;
 	dev_info(ave->dev,
-		 "Config submitted: %u bytes extra0 %#llx flags %02x %02x shared %#llx/%#x (buf %d)\n",
-		 len, (unsigned long long)ave->extra0_dma,
-		 len > 0x40 ? cmd[0x40] : 0, len > 0x41 ? cmd[0x41] : 0,
+		 "Config submitted: %u bytes extra0 %#llx flags %02x %02x shared %#llx/%#x mcpu %u (buf %d)\n",
+		 len, (unsigned long long)ave->extra0_dma, flag40, flag41,
 		 len > 0x67 ? get_unaligned_le64(cmd + 0x60) : 0,
-		 len > 0x6b ? get_unaligned_le32(cmd + 0x68) : 0, buf);
+		 len > 0x6b ? get_unaligned_le32(cmd + 0x68) : 0,
+		 !flag40 && flag41, buf);
 	ret = ave_ipc_settle(ave, AVE_CMD_WAIT_MS);
 	if (!ret)
 		dev_info(ave->dev, "Config answered\n");
