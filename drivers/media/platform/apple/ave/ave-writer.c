@@ -865,7 +865,18 @@ static void ave_start_config(const struct ave_params *p, u8 *cmd,
 		ave_start_put8(cmd, l->h264_adapt_b,
 			       fw->kind == AVE_LAYOUT_6070 ? 0 : p->bframes);
 		ave_start_put8(cmd, l->h264_pixel_packing, 1);
-		ave_start_put32(cmd, l->h264_transform_mode, p->high ? 2 : 0);
+		/*
+		 * 6070.11.1 stores rc_310 and the transform mode in the same
+		 * word (0xfcec). Writing the Main-profile transform value 0
+		 * on top of the non-CQ word 30 made 1 Mbit and 2.5 Mbit
+		 * converge. Leave that word alone when rate control is on.
+		 * Constant QP still publishes the transform mode.
+		 */
+		if (!(fw->kind == AVE_LAYOUT_6070 && !cq &&
+		      l->h264_transform_mode &&
+		      l->h264_transform_mode == l->rc_310))
+			ave_start_put32(cmd, l->h264_transform_mode,
+					p->high ? 2 : 0);
 		if (l->h264_skip_mode)
 			ave_put16(cmd, l->h264_skip_mode, AVE_AVC_RECON_SKIP_MODE);
 		ave_start_put32(cmd, l->h264_input_bit_depth, depth);

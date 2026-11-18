@@ -1287,8 +1287,10 @@ static int ave_h264_timing_bit(const u8 *rbsp, size_t nbytes, size_t *bit, bool 
 	}
 	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
 		return -1;
-	if (!v)
-		return 0; /* no VUI: nothing to hang timing on */
+	if (!v) {
+		*bit = pos - 1; /* vui_parameters_present_flag */
+		return 0;
+	}
 	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
 		return -1;
 	if (v) {
@@ -1331,20 +1333,58 @@ static int ave_h264_timing_bit(const u8 *rbsp, size_t nbytes, size_t *bit, bool 
 }
 
 /*
- * The 6070 firmware emits vui_parameters_present_flag and leaves
- * timing_info_present_flag clear. A raw Annex B reader then reports 25 fps.
- * num_units_in_tick = fps_den and time_scale = 2 * fps_num with
- * fixed_frame_rate_flag make the frame rate fps_num/fps_den (30/1 -> 30).
- * The SPS is rewritten in the output buffer; the firmware's copy is untouched.
- * A stream that already carries timing, or one this walk cannot follow, is
- * left as the firmware wrote it.
+ * Replace one Annex B NAL payload with an escaped RBSP. The header bytes
+ * stay. Returns 0 after *len grows, or -1 with @buf unchanged.
+ */
+static int ave_stamp_commit(u8 *buf, size_t room, size_t *len, size_t nal,
+			    size_t nal_len, size_t next, unsigned int hdr,
+			    const u8 *rebuilt, size_t out_bits, u8 *escaped,
+			    size_t esc_cap)
+{
+	size_t esc_len, new_nal_len, tail, need;
+
+	if (out_bits & 7)
+		out_bits += 8 - (out_bits & 7);
+	if (!out_bits ||
+	    ave_rbsp_escape(rebuilt, out_bits / 8, escaped, esc_cap, &esc_len))
+		return -1;
+	new_nal_len = hdr + esc_len;
+	if (new_nal_len < nal_len)
+		return -1;
+	need = *len - nal_len + new_nal_len;
+	if (need > room || nal + new_nal_len > room)
+		return -1;
+	tail = *len - next;
+	if (new_nal_len != nal_len && tail)
+		memmove(buf + nal + new_nal_len, buf + next, tail);
+	memcpy(buf + nal + hdr, escaped, esc_len);
+	*len = need;
+	return 0;
+}
+
+/*
+ * The 6070 firmware leaves timing_info_present_flag clear. With B-frames
+ * off it also leaves vui_parameters_present_flag clear, and a raw Annex B
+ * reader then reports 25 fps. num_units_in_tick = fps_den and time_scale =
+ * 2 * fps_num with fixed_frame_rate_flag make the frame rate fps_num/fps_den
+ * (30/1 -> 30). An existing VUI is rewritten in place. A missing VUI is
+ * replaced by a minimal one (aspect, overscan, video signal and chroma
+ * location clear; timing on; HRD, pic_struct and bitstream_restriction
+ * clear) and the old trailing bits are dropped. The 720p no-VUI SPS
+ * 274d001fda014016e4 becomes 274d001fda014016e840000003004000000f21, which
+ * muxes as 30/1. The in-VUI rewrite of
+ * 274d0028e5603c0113f2c03c20104e stays
+ * 274d0028e5603c0113f2c2000003000200000300791e10082700.
+ * The SPS is rewritten in the output buffer; the firmware's copy is
+ * untouched. A stream that already carries timing, or one this walk cannot
+ * follow, is left as the firmware wrote it.
  */
 static void ave_h264_stamp_timing(u8 *buf, size_t room, size_t *len,
 				  u32 fps_num, u32 fps_den)
 {
 	size_t i = 0;
 	u8 rbsp[128], rebuilt[160], escaped[192];
-	size_t rbsp_len, out_bits = 0, esc_len, nal_bits;
+	size_t rbsp_len, out_bits = 0, nal_bits;
 	size_t timing;
 	bool present;
 	u32 flag;
@@ -1354,7 +1394,7 @@ static void ave_h264_stamp_timing(u8 *buf, size_t room, size_t *len,
 		return;
 	while (i + 4 < *len) {
 		unsigned int sc = ave_start_code(buf, *len, i);
-		size_t nal, next, nal_len, new_nal_len, tail, need;
+		size_t nal, next, nal_len;
 		u8 hdr;
 
 		if (!sc) {
@@ -1376,43 +1416,47 @@ static void ave_h264_stamp_timing(u8 *buf, size_t room, size_t *len,
 		if (nal_len < 2 ||
 		    ave_rbsp_unescape(buf + nal + 1, nal_len - 1, rbsp, sizeof(rbsp),
 				      &rbsp_len) ||
-		    ave_h264_timing_bit(rbsp, rbsp_len, &timing, &present) ||
-		    !present)
+		    ave_h264_timing_bit(rbsp, rbsp_len, &timing, &present))
 			return;
 		nal_bits = rbsp_len * 8;
-		if (ave_bit_get(rbsp, nal_bits, &timing, 1, &flag))
-			return;
-		timing--; /* the flag bit itself */
-		if (flag)
-			return; /* firmware already set the clock */
+		out_bits = 0;
 		memset(rebuilt, 0, sizeof(rebuilt));
-		if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
-				 nal_bits, 0, timing) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num * 2, 32) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
-		    ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
-				 nal_bits, timing + 1, nal_bits - (timing + 1)))
-			return;
-		/* Pad the last byte the way an RBSP ends a NAL. */
-		if (out_bits & 7)
-			out_bits += 8 - (out_bits & 7);
-		if (ave_rbsp_escape(rebuilt, out_bits / 8, escaped, sizeof(escaped),
-				    &esc_len))
-			return;
-		new_nal_len = 1 + esc_len;
-		if (new_nal_len < nal_len)
-			return;
-		need = *len + (new_nal_len - nal_len);
-		if (need > room || i + sc + new_nal_len > room)
-			return;
-		tail = *len - next;
-		if (new_nal_len != nal_len && tail)
-			memmove(buf + nal + new_nal_len, buf + next, tail);
-		buf[nal] = hdr;
-		memcpy(buf + nal + 1, escaped, esc_len);
-		*len = need;
+		if (!present) {
+			if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+					 nal_bits, 0, timing) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num * 2, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1))
+				return;
+		} else {
+			if (ave_bit_get(rbsp, nal_bits, &timing, 1, &flag))
+				return;
+			timing--; /* the flag bit itself */
+			if (flag)
+				return; /* firmware already set the clock */
+			if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+					 nal_bits, 0, timing) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num * 2, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+			    ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+					 nal_bits, timing + 1, nal_bits - (timing + 1)))
+				return;
+		}
+		ave_stamp_commit(buf, room, len, nal, nal_len, next, 1, rebuilt,
+				 out_bits, escaped, sizeof(escaped));
 		return;
 	}
 }
@@ -1566,8 +1610,10 @@ static int ave_hevc_timing_bit(const u8 *rbsp, size_t nbytes, size_t *bit,
 	    ave_bit_get(rbsp, nbits, &pos, 1, &v) ||
 	    ave_bit_get(rbsp, nbits, &pos, 1, &v))
 		return -1;
-	if (!v)
-		return 0; /* no VUI */
+	if (!v) {
+		*bit = pos - 1; /* vui_parameters_present_flag */
+		return 0;
+	}
 	if (ave_bit_get(rbsp, nbits, &pos, 1, &v))
 		return -1;
 	if (v) {
@@ -1624,15 +1670,21 @@ static int ave_hevc_timing_bit(const u8 *rbsp, size_t nbytes, size_t *bit,
  * Same missing-clock problem as H.264, different syntax. HEVC frame rate is
  * time_scale / num_units_in_tick with no field-tick halving, so 30/1 is
  * written as 1 and 30. vui_poc_proportional_to_timing_flag and
- * vui_hrd_parameters_present_flag stay clear. A raw Annex B reader can still
- * print 25 fps; an mp4 mux of the same bytes reports the stamped rate.
+ * vui_hrd_parameters_present_flag stay clear. A missing VUI is replaced by
+ * a minimal one and sps_extension_present_flag stays clear; the old trailing
+ * bits are dropped. The 720p no-VUI SPS
+ * 420101016000000300b0000003000003005da00280802d165aee4522ae5cb97040
+ * becomes
+ * 420101016000000300b0000003000003005da00280802d165aee4522ae5cb9710080000003008000000f04,
+ * which decodes and muxes as 30/1. A raw Annex B reader can still print
+ * 25 fps; an mp4 mux of the same bytes reports the stamped rate.
  */
 static void ave_hevc_stamp_timing(u8 *buf, size_t room, size_t *len,
 				  u32 fps_num, u32 fps_den)
 {
 	size_t i = 0;
 	u8 rbsp[256], rebuilt[320], escaped[384];
-	size_t rbsp_len, out_bits = 0, esc_len, nal_bits;
+	size_t rbsp_len, out_bits = 0, nal_bits;
 	size_t timing;
 	bool present;
 	u32 flag;
@@ -1641,8 +1693,7 @@ static void ave_hevc_stamp_timing(u8 *buf, size_t room, size_t *len,
 		return;
 	while (i + 4 < *len) {
 		unsigned int sc = ave_start_code(buf, *len, i);
-		size_t nal, next, nal_len, new_nal_len, tail, need;
-		u8 hdr0, hdr1;
+		size_t nal, next, nal_len;
 
 		if (!sc) {
 			i++;
@@ -1654,9 +1705,7 @@ static void ave_hevc_stamp_timing(u8 *buf, size_t room, size_t *len,
 			next++;
 		if (nal + 1 >= *len)
 			return;
-		hdr0 = buf[nal];
-		hdr1 = buf[nal + 1];
-		if (((hdr0 >> 1) & 0x3f) != 33) {
+		if (((buf[nal] >> 1) & 0x3f) != 33) {
 			i = next;
 			continue;
 		}
@@ -1664,44 +1713,49 @@ static void ave_hevc_stamp_timing(u8 *buf, size_t room, size_t *len,
 		if (nal_len < 3 ||
 		    ave_rbsp_unescape(buf + nal + 2, nal_len - 2, rbsp, sizeof(rbsp),
 				      &rbsp_len) ||
-		    ave_hevc_timing_bit(rbsp, rbsp_len, &timing, &present) ||
-		    !present)
+		    ave_hevc_timing_bit(rbsp, rbsp_len, &timing, &present))
 			return;
 		nal_bits = rbsp_len * 8;
-		if (ave_bit_get(rbsp, nal_bits, &timing, 1, &flag))
-			return;
-		timing--;
-		if (flag)
-			return;
+		out_bits = 0;
 		memset(rebuilt, 0, sizeof(rebuilt));
-		if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
-				 nal_bits, 0, timing) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num, 32) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
-		    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
-		    ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
-				 nal_bits, timing + 1, nal_bits - (timing + 1)))
-			return;
-		if (out_bits & 7)
-			out_bits += 8 - (out_bits & 7);
-		if (ave_rbsp_escape(rebuilt, out_bits / 8, escaped, sizeof(escaped),
-				    &esc_len))
-			return;
-		new_nal_len = 2 + esc_len;
-		if (new_nal_len < nal_len)
-			return;
-		need = *len + (new_nal_len - nal_len);
-		if (need > room || i + sc + new_nal_len > room)
-			return;
-		tail = *len - next;
-		if (new_nal_len != nal_len && tail)
-			memmove(buf + nal + new_nal_len, buf + next, tail);
-		buf[nal] = hdr0;
-		buf[nal + 1] = hdr1;
-		memcpy(buf + nal + 2, escaped, esc_len);
-		*len = need;
+		if (!present) {
+			unsigned int z;
+
+			if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+					 nal_bits, 0, timing) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1))
+				return;
+			for (z = 0; z < 8; z++)
+				if (ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1))
+					return;
+			if (ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1))
+				return;
+		} else {
+			if (ave_bit_get(rbsp, nal_bits, &timing, 1, &flag))
+				return;
+			timing--;
+			if (flag)
+				return;
+			if (ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+					 nal_bits, 0, timing) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 1, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_den, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, fps_num, 32) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_put(rebuilt, sizeof(rebuilt) * 8, &out_bits, 0, 1) ||
+			    ave_bit_copy(rebuilt, sizeof(rebuilt) * 8, &out_bits, rbsp,
+					 nal_bits, timing + 1, nal_bits - (timing + 1)))
+				return;
+		}
+		ave_stamp_commit(buf, room, len, nal, nal_len, next, 2, rebuilt,
+				 out_bits, escaped, sizeof(escaped));
 		return;
 	}
 }
