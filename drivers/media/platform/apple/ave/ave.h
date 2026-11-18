@@ -250,6 +250,8 @@ struct ave_variant {
 	bool boot_qualified;
 	/* 6070 Config carries a 64 KiB shared area. */
 	bool config_shared;
+	/* Sessions one firmware boot serves; 0 takes the layout's count. */
+	u8 max_sessions;
 };
 
 /* Start surfaces of an MCTF session, aliases included */

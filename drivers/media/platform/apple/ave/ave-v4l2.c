@@ -764,6 +764,12 @@ static unsigned int ave_session_count(struct ave_dev *ave)
 	return n;
 }
 
+static unsigned int ave_session_cap(struct ave_dev *ave)
+{
+	return ave->variant->max_sessions ?: ave->layout->max_sessions ?:
+	       AVE_MAX_SESSIONS;
+}
+
 /*
  * Drain normally, or Flush an aborted 6070 stream, then Stop and Close. The
  * last session to go halts the firmware. Caller holds hw_lock.
@@ -821,7 +827,7 @@ static int ave_session_attach(struct ave_ctx *ctx)
 {
 	struct ave_dev *ave = ctx->ave;
 	struct ave_session *sess = ctx->sess;
-	unsigned int max_sessions = ave->layout->max_sessions ?: AVE_MAX_SESSIONS;
+	unsigned int max_sessions = ave_session_cap(ave);
 	int idx = -1, ret;
 
 	lockdep_assert_held(&ave->hw_lock);
@@ -933,7 +939,7 @@ static int ave_session_begin(struct ave_ctx *ctx)
 	ret = ctx->mctf ? ave_mctf_check_build(ave) : ave_fw_check_build(ave);
 	if (ret)
 		return ret;
-	if (ave->layout->max_sessions == 1 && READ_ONCE(ave->sessions[0]))
+	if (ave_session_cap(ave) <= 1 && READ_ONCE(ave->sessions[0]))
 		return -EBUSY;
 	if (READ_ONCE(ave->sessions[0]) && READ_ONCE(ave->sessions[1]))
 		return -EBUSY;

@@ -1437,6 +1437,10 @@ static void ave_6070_variants(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, ave_t6021.config_shared);
 	KUNIT_EXPECT_FALSE(test, ave_t6000.config_shared);
 	KUNIT_EXPECT_FALSE(test, ave_t8112.config_shared);
+	/* Only T6021 serves two sessions per boot. */
+	KUNIT_EXPECT_EQ(test, ave_t6021.max_sessions, 2U);
+	KUNIT_EXPECT_EQ(test, ave_t6000.max_sessions, 0U);
+	KUNIT_EXPECT_EQ(test, ave_t8112.max_sessions, 0U);
 	KUNIT_EXPECT_EQ(test, ave_t6000.regs->ctrl, 0x400044U);
 	KUNIT_EXPECT_EQ(test, ave_t8112.regs->timebase, 0x178000U);
 	KUNIT_EXPECT_GE(test, t->command_bytes, 0x32dc8U);
