@@ -129,3 +129,31 @@
 #include "t6021-peripherals.dtsi"
 
 #include "t6021-j475c-peripherals.dtsi"
+
+/*
+ * Both video encoders. The boot loader hands each the firmware iBoot
+ * preloads; without that handoff the encoder is disabled.
+ */
+&m2_dart_ave0_0 {
+	status = "okay";
+};
+
+&m2_dart_ave0_1 {
+	status = "okay";
+};
+
+&m2_ave0 {
+	status = "okay";
+};
+
+&m2_dart_ave1_0 {
+	status = "okay";
+};
+
+&m2_dart_ave1_1 {
+	status = "okay";
+};
+
+&m2_ave1 {
+	status = "okay";
+};
