@@ -610,6 +610,7 @@ const struct ave_fw_layout ave_layout_6070_11_1 = {
 			.rc_param_avg_fps = 0xfee8,
 			.rc_param_fps = 0xfeec,
 			.rc_param_flag = 0xfef0,
+			.verbose_params = 0xfc78,
 			.coded_w = 0x60,
 			.coded_h = 0x64,
 			.ref_compression = 0xfd7d,

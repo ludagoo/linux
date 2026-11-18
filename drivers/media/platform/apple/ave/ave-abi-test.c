@@ -612,6 +612,10 @@ static void ave_6070_start_process_fields(struct kunit *test)
 					get_unaligned_le32(start + sl->fps.numerator), 30U);
 			KUNIT_EXPECT_EQ(test, get_unaligned_le32(start + sl->rc_mode),
 					sl->rc_mode_fixed_qp);
+			if (sl->verbose_params)
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start +
+								   sl->verbose_params), 0U);
 			KUNIT_EXPECT_EQ(test, sl->rc_mode_fixed_qp, 2U);
 			KUNIT_EXPECT_EQ(test, get_unaligned_le32(start + sl->bitrate),
 					0U);
@@ -762,6 +766,9 @@ static void ave_6070_start_process_fields(struct kunit *test)
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le32(start + sl->rc_param_flag), 1U);
 				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->verbose_params),
+						AVE_6070_VERBOSE_PROBE);
+				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le64(start + sl->rc_param_bitrate + 8),
 						0ULL);
 				KUNIT_EXPECT_NE(test,
@@ -784,6 +791,9 @@ static void ave_6070_start_process_fields(struct kunit *test)
 						4000000U);
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le32(start + sl->rc_param_flag), 1U);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->verbose_params),
+						AVE_6070_VERBOSE_PROBE);
 				sess->p.rc_mode = AVE_RC_CQ;
 				memset(start, 0, 0x32dc8);
 				KUNIT_ASSERT_EQ(test,
@@ -791,6 +801,8 @@ static void ave_6070_start_process_fields(struct kunit *test)
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le64(start + sl->neighbour_fw.address),
 						sess->neighbour_fw[0].dma);
+				KUNIT_EXPECT_EQ(test,
+						get_unaligned_le32(start + sl->verbose_params), 0U);
 				KUNIT_EXPECT_EQ(test, start[sl->ref_compression], 1U);
 				KUNIT_EXPECT_EQ(test,
 						get_unaligned_le64(start + sl->recon.address),
