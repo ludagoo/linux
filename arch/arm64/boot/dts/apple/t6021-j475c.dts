@@ -134,7 +134,53 @@
  */
 &smc_hwmon {
 	apple,discover-temperatures;
+	apple,thermal-pressure-key = "mTPL";
 	/delete-node/ temperature-TH0x;
+
+	power-PHPC {
+		apple,key-id = "PHPC";
+		label = "Heatpipe Power";
+	};
+
+	power-PSVR {
+		apple,key-id = "PSVR";
+		label = "SoC VR Power";
+	};
+
+	power-PSVC {
+		apple,key-id = "PSVC";
+		label = "SoC Core Power";
+	};
+
+	power-PPSR {
+		apple,key-id = "PPSR";
+		label = "PMU PPSR";
+	};
+
+	power-PPMC {
+		apple,key-id = "PPMC";
+		label = "PMU PPMC";
+	};
+
+	power-PC10 {
+		apple,key-id = "PC10";
+		label = "GPU Phase PC10";
+	};
+
+	power-PC12 {
+		apple,key-id = "PC12";
+		label = "GPU Phase PC12";
+	};
+
+	power-PC20 {
+		apple,key-id = "PC20";
+		label = "GPU Phase PC20";
+	};
+
+	power-PC22 {
+		apple,key-id = "PC22";
+		label = "GPU Phase PC22";
+	};
 };
 
 #include "t6021-peripherals.dtsi"
