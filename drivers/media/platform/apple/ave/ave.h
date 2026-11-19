@@ -194,6 +194,18 @@ enum ave_opcode {
  * AppleAVE2FW 9013.55.1: TEXT 0x154000, DATA 0x12c000, as 26A428's.
  */
 #define AVE_FW_TEXT_CRC_T8142_26B123 0x24eb4625
+/*
+ * The M2 Max (T6021) build of encoder firmware 6070.11.1, macOS 13.5 22G74,
+ * with the link cell at TEXT 0x423c zero.
+ */
+#define AVE_FW_TEXT_CRC_T6021_6070 0x0d56db87
+
+/*
+ * 6070 Config: address and size of the shared area the T6021 build
+ * requires (variant config_shared).
+ */
+#define AVE_6070_CONFIG_SHARED_ADDR 0x60
+#define AVE_6070_CONFIG_SHARED_SIZE 0x68
 
 struct ave_ctx;
 
@@ -269,6 +281,8 @@ struct ave_variant {
 	size_t extra0_size;
 	/* Register sequence and boot/hello configuration have been qualified. */
 	bool boot_qualified;
+	/* 6070 Config carries a 64 KiB shared area. */
+	bool config_shared;
 };
 
 /* Start surfaces of an MCTF session, aliases included */
@@ -319,6 +333,8 @@ struct ave_dev {
 	dma_addr_t extra0_dma;
 	size_t extra0_map_size;
 	bool extra0_mapped;
+	/* Config's shared area, for a variant with config_shared */
+	struct ave_buf config_shared;
 	bool module_pinned;
 	/* A 6070 lifecycle command is serialized per logical operation. */
 	struct ave_reply expected[AVE_OP_COUNT];
@@ -577,8 +593,8 @@ static inline struct ave_ctx *ave_file_to_ctx(struct file *file)
 	return container_of(file_to_v4l2_fh(file), struct ave_ctx, fh);
 }
 
-extern const struct ave_variant ave_t6000, ave_t6041, ave_t8112, ave_t8132,
-	ave_m3;
+extern const struct ave_variant ave_t6000, ave_t6021, ave_t6041, ave_t8112,
+	ave_t8132, ave_m3;
 
 /* ave-fw.c */
 u64 ave_fw_vcbar(const struct ave_variant *variant, u64 text_iova);

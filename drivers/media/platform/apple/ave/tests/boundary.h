@@ -4,6 +4,7 @@ struct ave_dev {
 	struct ave_ctx *sessions[AVE_MAX_SESSIONS];
 	u32 next_client, text_crc, data_crc;
 	dma_addr_t extra0_dma;
+	struct ave_buf config_shared;
 	const struct ave_fw_layout *layout;
 	const struct ave_variant *variant;
 	enum ave_fw_state fw_state;

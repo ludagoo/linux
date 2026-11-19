@@ -49,6 +49,7 @@ static const u32 ave_known_text_crc[] = {
 	AVE_FW_TEXT_CRC_T8142_26B123, /* encoder firmware 9013.55.1, macOS 27.2 26B123 / T8142 */
 	0x460c7a7c, /* encoder firmware 6070.11.1 / T6000 */
 	0x25bfd039, /* encoder firmware 6070.11.1 / T8112 */
+	AVE_FW_TEXT_CRC_T6021_6070, /* encoder firmware 6070.11.1 / T6021 */
 };
 
 static int ave_fw_chosen_crc(struct ave_dev *ave, const char *name, u32 *crc)
@@ -548,6 +549,7 @@ void ave_fw_release_boot(struct ave_dev *ave)
 	ave_free(ave, &ave->log);
 	ave_free(ave, &ave->boot_cfg);
 	ave_free(ave, &ave->ipc);
+	ave_free(ave, &ave->config_shared);
 	if (ave->module_pinned) {
 		ave->module_pinned = false;
 		module_put(THIS_MODULE);
@@ -824,6 +826,9 @@ static int ave_fw_boot(struct ave_dev *ave)
 		ret = ave_alloc(ave, &ave->log, AVE_LOG_BYTES, 0);
 	if (!ret)
 		ret = ave_fw_map_extra0(ave);
+	/* Config's shared area lives as long as this firmware boot. */
+	if (!ret && ave->variant->config_shared)
+		ret = ave_alloc(ave, &ave->config_shared, SZ_64K, 0);
 	if (ret)
 		return ret;
 
@@ -872,6 +877,8 @@ static int ave_fw_boot(struct ave_dev *ave)
 	memset(ave->ipc.cpu, 0, ave->ipc.alloc);
 	if (ave->heap.cpu)
 		memset(ave->heap.cpu, 0, ave->heap.alloc);
+	if (ave->config_shared.cpu)
+		memset(ave->config_shared.cpu, 0, ave->config_shared.alloc);
 
 	if (t->boot_config) {
 		cfg = ave->boot_cfg.cpu;
