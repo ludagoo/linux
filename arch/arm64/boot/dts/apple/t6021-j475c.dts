@@ -125,3 +125,14 @@
 };
 
 #include "hwmon-fan-dual.dtsi"
+
+/*
+ * Expose every readable float T* SMC key (labelled by key name) so the
+ * J475c sensors can be verified without a curated table. Discovery rejects
+ * DT temperature channels, so drop the shared NAND node (TH0x is still
+ * discovered automatically).
+ */
+&smc_hwmon {
+	apple,discover-temperatures;
+	/delete-node/ temperature-TH0x;
+};
