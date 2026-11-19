@@ -1679,6 +1679,30 @@ static void ave_6070_qualified_bytes(struct kunit *test)
 	}
 }
 
+/*
+ * One iommu-addresses tuple per device: a reservation shared by two
+ * encoders has one for each, and a missing, duplicated or zero phandle
+ * gives none.
+ */
+static void ave_fw_iommu_tuples(struct kunit *test)
+{
+	static const __be32 prop[] = {
+		cpu_to_be32(0x17d), cpu_to_be32(0x100), 0, 0, cpu_to_be32(0xf0000),
+		cpu_to_be32(0x17e), cpu_to_be32(0x100), 0, 0, cpu_to_be32(0xf0000),
+		cpu_to_be32(0x17e), cpu_to_be32(0x100), 0, 0, cpu_to_be32(0xf0000),
+	};
+	const int one = 5 * sizeof(__be32);
+
+	KUNIT_EXPECT_PTR_EQ(test, ave_fw_iommu_tuple(prop, 2 * one, 0x17d), &prop[0]);
+	KUNIT_EXPECT_PTR_EQ(test, ave_fw_iommu_tuple(prop, 2 * one, 0x17e), &prop[5]);
+	KUNIT_EXPECT_NULL(test, ave_fw_iommu_tuple(prop, 3 * one, 0x17e));
+	KUNIT_EXPECT_NULL(test, ave_fw_iommu_tuple(prop, 2 * one, 0x17f));
+	KUNIT_EXPECT_NULL(test, ave_fw_iommu_tuple(prop, 2 * one, 0));
+	KUNIT_EXPECT_NULL(test, ave_fw_iommu_tuple(prop, one + 4, 0x17d));
+	KUNIT_EXPECT_NULL(test, ave_fw_iommu_tuple(prop, 0, 0x17d));
+	KUNIT_EXPECT_NULL(test, ave_fw_iommu_tuple(NULL, one, 0x17d));
+}
+
 static struct kunit_case ave_abi_cases[] = {
 	KUNIT_CASE(ave_t6041_text_boot_word),
 	KUNIT_CASE(ave_9003_byte_equality), KUNIT_CASE(ave_9003_hevc_main10),
@@ -1688,6 +1712,7 @@ static struct kunit_case ave_abi_cases[] = {
 	KUNIT_CASE(ave_6070_split_surfaces),
 	KUNIT_CASE(ave_6070_start_process_fields),
 	KUNIT_CASE(ave_6070_qualified_bytes),
+	KUNIT_CASE(ave_fw_iommu_tuples),
 	KUNIT_CASE(ave_6070_reordered_pictures),
 	KUNIT_CASE(ave_6070_hevc_contract),
 	KUNIT_CASE(ave_6070_entropy_interleave),

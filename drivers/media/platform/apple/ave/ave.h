@@ -588,6 +588,7 @@ const struct ave_variant *ave_fw_select_build(const struct ave_variant *v,
 					      size_t text, size_t data);
 int ave_fw_text_id_crc(const void *text, size_t size, u32 cell_off,
 		       u64 data_iova, u32 *crc);
+const __be32 *ave_fw_iommu_tuple(const __be32 *prop, int len, u32 phandle);
 int ave_fw_text_boot_crc(const void *text, size_t size, u32 word_off,
 			 u32 *crc);
 void ave_fw_remove(struct ave_dev *ave);
