@@ -16,6 +16,7 @@ struct ave_dev {
 	bool mctf_pool_crc_valid;
 	bool witness_unusable;
 	u32 mctf_pool_changed;
+	int usage;
 };
 
 struct ave_ctx {
@@ -102,3 +103,6 @@ static void ave_debugfs_save(struct ave_dev *ave, enum ave_codec codec,
 			     enum ave_image kind, const void *cmd, size_t len)
 {
 }
+
+static inline void ave_usage_frame_begin(int *u) { }
+static inline void ave_usage_frame_done(int *u) { }

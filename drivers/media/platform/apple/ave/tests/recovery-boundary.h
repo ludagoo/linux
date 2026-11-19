@@ -99,6 +99,7 @@ struct ave_dev {
 	bool mctf_pool_crc_valid;
 	bool witness_unusable;
 	u32 mctf_pool_changed;
+	int usage;
 };
 
 static void *test_ctrl_addr;
@@ -346,3 +347,13 @@ static void ave_fw_release_boot(struct ave_dev *ave)
 {
  assert(!"6070 boot teardown reached a 9003 recovery fixture");
 }
+
+static inline void ave_usage_frame_begin(int *u) { (void)u; }
+static inline void ave_usage_session_begin(int *u) { (void)u; }
+static inline void ave_usage_session_end(int *u, unsigned int abandoned)
+{
+	(void)u;
+	(void)abandoned;
+}
+
+static inline void ave_usage_cancel_all(int *u) { (void)u; }
