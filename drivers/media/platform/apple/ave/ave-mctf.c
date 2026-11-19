@@ -479,6 +479,7 @@ int ave_mctf_cmd_process(struct ave_ctx *ctx, unsigned int slot,
 	sess->progress = jiffies;
 	sess->last_sent = jiffies;
 	sess->busy++;
+	ave_usage_frame_begin(&ave->usage);
 	sess->frames++;
 	return 0;
 }

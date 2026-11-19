@@ -23,6 +23,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/seq_file.h>
 #include <linux/sprintf.h>
+#include <linux/sysfs.h>
 #include <linux/vmalloc.h>
 
 #include "ave.h"
@@ -486,6 +487,7 @@ static int ave_probe(struct platform_device *pdev)
 	if (!ave->variant)
 		return -ENODEV;
 	mutex_init(&ave->hw_lock);
+	ave_usage_init(&ave->usage);
 	platform_set_drvdata(pdev, ave);
 
 	ave->codec = devm_platform_ioremap_resource_byname(pdev, "codec");
@@ -661,6 +663,41 @@ static const struct of_device_id ave_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, ave_of_match);
 
+static ssize_t busy_ns_show(struct device *dev, struct device_attribute *attr,
+			    char *buf)
+{
+	struct ave_dev *ave = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%llu\n", ave_usage_busy_ns(&ave->usage));
+}
+static DEVICE_ATTR_RO(busy_ns);
+
+static ssize_t active_sessions_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct ave_dev *ave = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%u\n", ave_usage_active_sessions(&ave->usage));
+}
+static DEVICE_ATTR_RO(active_sessions);
+
+static ssize_t frames_show(struct device *dev, struct device_attribute *attr,
+			   char *buf)
+{
+	struct ave_dev *ave = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%llu\n", ave_usage_frames(&ave->usage));
+}
+static DEVICE_ATTR_RO(frames);
+
+static struct attribute *ave_attrs[] = {
+	&dev_attr_busy_ns.attr,
+	&dev_attr_active_sessions.attr,
+	&dev_attr_frames.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(ave);
+
 static struct platform_driver ave_driver = {
 	.probe = ave_probe,
 	.remove = ave_remove,
@@ -668,6 +705,7 @@ static struct platform_driver ave_driver = {
 		.name = "apple-ave",
 		.of_match_table = ave_of_match,
 		.pm = pm_ptr(&ave_pm_ops),
+		.dev_groups = ave_groups,
 		/* A started coprocessor keeps its memory; do not unbind at will. */
 		.suppress_bind_attrs = true,
 	},

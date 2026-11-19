@@ -1227,6 +1227,7 @@ void ave_fw_lost(struct ave_dev *ave)
 {
 	lockdep_assert_held(&ave->hw_lock);
 	ave->fw_state = AVE_FW_OFF;
+	ave_usage_cancel_all(&ave->usage);
 	memset(ave->ring, 0, sizeof(ave->ring));
 	ave->ipc_fw_base = 0;
 }

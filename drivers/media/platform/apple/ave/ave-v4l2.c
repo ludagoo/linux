@@ -831,6 +831,7 @@ static void ave_session_close(struct ave_ctx *ctx, bool drain)
 		}
 	}
 	ave->sessions[idx] = NULL;
+	ave_usage_session_end(&ave->usage, sess->busy);
 	if (!ave_session_count(ave))
 		ave_fw_halt(ave);
 }
@@ -868,6 +869,7 @@ static int ave_session_attach(struct ave_ctx *ctx)
 	sess->frames = 0;
 	sess->nudged = false;
 	ave->sessions[idx] = ctx;
+	ave_usage_session_begin(&ave->usage);
 	ret = ctx->mctf ? ave_sess_mctf_borrow(ctx) : 0;
 	if (!ret)
 		ret = ave_cmd_open(ctx);

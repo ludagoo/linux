@@ -27,6 +27,7 @@
 
 #include "ave-sizes.h"
 #include "ave-recovery.h"
+#include "ave-usage.h"
 
 struct debugfs_blob_wrapper;
 struct dentry;
@@ -302,6 +303,7 @@ struct ave_dev {
 
 	/* hw_lock protects recovery history and quarantined DMA allocations. */
 	struct ave_recovery_history recovery;
+	struct ave_usage usage;
 	unsigned int recovery_count;
 	struct ave_session *failed_sessions;
 	bool inject_wedge;

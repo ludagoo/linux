@@ -1065,6 +1065,7 @@ void ave_sess_reply(struct ave_dev *ave, const struct ave_reply *reply)
 	s->busy = false;
 	s->done = true;
 	sess->busy--;
+	ave_usage_frame_done(&ave->usage);
 	sess->done_fifo[(sess->done_head + sess->done_count) % AVE_MAX_SLOTS] =
 		slot;
 	sess->done_count++;

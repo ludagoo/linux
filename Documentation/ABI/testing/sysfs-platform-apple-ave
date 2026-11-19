@@ -1,0 +1,24 @@
+What:		/sys/devices/platform/soc/<addr>.video-codec/busy_ns
+Date:		November 2026
+Contact:	linux-media@vger.kernel.org
+Description:
+		Read-only cumulative nanoseconds during which at least one frame
+		was in flight on this Apple AVE encoder instance. Concurrent
+		frames or sessions are merged as a union so the counter never
+		grows faster than wall-clock time. When a read occurs while
+		frames are in flight, the elapsed time of the active interval
+		is included. Mode 0444 (readable by non-root users).
+
+What:		/sys/devices/platform/soc/<addr>.video-codec/active_sessions
+Date:		November 2026
+Contact:	linux-media@vger.kernel.org
+Description:
+		Read-only count of currently open encoding sessions attached to
+		the firmware on this Apple AVE encoder instance. Mode 0444.
+
+What:		/sys/devices/platform/soc/<addr>.video-codec/frames
+Date:		November 2026
+Contact:	linux-media@vger.kernel.org
+Description:
+		Read-only cumulative count of completed encoded frames returned
+		by the firmware on this Apple AVE encoder instance. Mode 0444.
