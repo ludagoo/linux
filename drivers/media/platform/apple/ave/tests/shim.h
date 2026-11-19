@@ -30,6 +30,12 @@ typedef uint64_t dma_addr_t;
 #define IS_ALIGNED(x, a) (!((x) & ((typeof(x))(a) - 1)))
 #define max(x, y) ((x) > (y) ? (x) : (y))
 #define max_t(t, x, y) ((t)(x) > (t)(y) ? (t)(x) : (t)(y))
+#ifndef div_u64
+#define div_u64(x, y) ((u64)(x) / (u32)(y))
+#endif
+#ifndef min_t
+#define min_t(t, x, y) ({ t _x = (x), _y = (y); _x < _y ? _x : _y; })
+#endif
 #define GFP_KERNEL 0
 #define DMA_ATTR_NO_KERNEL_MAPPING 1
 static inline void *kcalloc(size_t n, size_t size, int flags)

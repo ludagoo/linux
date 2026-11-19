@@ -19,10 +19,15 @@ struct ave_dev {
 	u32 mctf_pool_changed;
 };
 
+#ifndef READ_ONCE
+#define READ_ONCE(x) (x)
+#endif
+
 struct ave_ctx {
 	struct ave_dev *ave;
 	struct ave_session *sess;
 	int ready;
+	u32 fps_now, bitrate_peak;
 };
 
 struct vb2_v4l2_buffer {

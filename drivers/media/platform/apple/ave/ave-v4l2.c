@@ -406,6 +406,14 @@ static int ave_s_parm(struct file *file, void *priv, struct v4l2_streamparm *a)
 		*t = (struct v4l2_fract){ 1, 1 };
 	ctx->timeperframe = *t;
 	a->parm.output.capability = V4L2_CAP_TIMEPERFRAME;
+	/*
+	 * The firmware keeps the frame rate from Start. A rate set while
+	 * streaming scales the bit rate each Process asks for instead.
+	 */
+	if (ctx->ave->layout && ctx->ave->layout->rate_control)
+		WRITE_ONCE(ctx->fps_now,
+			   max_t(u32, DIV_ROUND_CLOSEST_ULL((u64)t->denominator,
+							    t->numerator), 1));
 	return 0;
 }
 
@@ -505,7 +513,7 @@ static int ave_s_ctrl(struct v4l2_ctrl *ctrl)
 		WRITE_ONCE(ctx->bitrate, ctrl->val);
 		break;
 	case V4L2_CID_MPEG_VIDEO_BITRATE_PEAK:
-		ctx->bitrate_peak = ctrl->val;
+		WRITE_ONCE(ctx->bitrate_peak, ctrl->val);
 		break;
 	case V4L2_CID_MPEG_VIDEO_GOP_SIZE:
 		ctx->gop_size = ctrl->val;
@@ -576,11 +584,19 @@ static int ave_init_ctrls(struct ave_ctx *ctx)
 	v4l2_ctrl_handler_init(hdl, 19);
 
 	/*
-	 * The 6070 firmware path (M1 Pro/Max, M2) is qualified for constant
-	 * quality only: offer just that mode, so a client that keeps the
-	 * defaults (GStreamer, FFmpeg) gets a session instead of a refusal.
+	 * A 6070 layout without rate_control runs constant quality only:
+	 * offer just that mode, so a client that keeps the defaults
+	 * (GStreamer, FFmpeg) gets a session instead of a refusal. With
+	 * rate_control it also offers CBR and VBR; the default stays CQ.
 	 */
-	if (ctx->ave->layout && ctx->ave->layout->kind == AVE_LAYOUT_6070)
+	if (ctx->ave->layout && ctx->ave->layout->rate_control)
+		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
+				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ,
+				       ~(BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_VBR) |
+					 BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CBR) |
+					 BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CQ)),
+				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ);
+	else if (ctx->ave->layout && ctx->ave->layout->kind == AVE_LAYOUT_6070)
 		v4l2_ctrl_new_std_menu(hdl, ops, V4L2_CID_MPEG_VIDEO_BITRATE_MODE,
 				       V4L2_MPEG_VIDEO_BITRATE_MODE_CQ,
 				       ~BIT(V4L2_MPEG_VIDEO_BITRATE_MODE_CQ),
