@@ -840,6 +840,18 @@ static int ave_session_attach(struct ave_ctx *ctx)
 		dev_err(ave->dev, "firmware state %d, cannot add a session\n", ave->fw_state);
 		return -EIO;
 	}
+	/*
+	 * A firmware boot reaps stopped sessions only after a proven power
+	 * cycle; without that proof they stay, so check after a boot too.
+	 */
+	if (ave->quarantined >= AVE_QUARANTINE_MAX) {
+		dev_warn_ratelimited(ave->dev,
+				     "%u stopped sessions wait for a power cycle; close every stream first\n",
+				     ave->quarantined);
+		if (!ave_session_count(ave))
+			ave_fw_halt(ave);
+		return -EBUSY;
+	}
 
 	sess->index = idx;
 	sess->frames = 0;

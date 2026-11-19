@@ -78,6 +78,7 @@ struct ave_dev {
 	enum ave_fw_state fw_state;
 	struct ave_ctx *sessions[AVE_MAX_SESSIONS];
 	struct ave_session *failed_sessions;
+	unsigned int quarantined;
 	struct ave_recovery_history recovery;
 	unsigned int recovery_count;
 	bool inject_wedge, data_dirty;
