@@ -135,6 +135,7 @@
 &smc_hwmon {
 	apple,discover-temperatures;
 	apple,thermal-pressure-key = "mTPL";
+	apple,soc-die-keys = "TCMz";
 	/delete-node/ temperature-TH0x;
 
 	power-PHPC {

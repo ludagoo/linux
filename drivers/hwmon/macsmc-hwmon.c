@@ -815,6 +815,9 @@ static int macsmc_hwmon_discover_temperatures(struct macsmc_hwmon *hwmon)
 	if (!smc->key_count || smc->key_count > U16_MAX)
 		return -EINVAL;
 
+	ret = of_property_count_strings(hwmon->dev->of_node, "apple,soc-die-keys");
+	hwmon->die_listed = ret > 0 ? ret : 0;
+
 	hwmon->temp.sensors = devm_kcalloc(hwmon->dev, smc->key_count,
 					   sizeof(*sensor), GFP_KERNEL);
 	if (!hwmon->temp.sensors)
@@ -848,6 +851,12 @@ static int macsmc_hwmon_discover_temperatures(struct macsmc_hwmon *hwmon)
 		/* Key identity only: do not invent locations or calibration. */
 		snprintf(sensor->label, sizeof(sensor->label), "%c%c%c%c",
 			 key >> 24, (key >> 16) & 0xff, (key >> 8) & 0xff, key & 0xff);
+		/* A listed SoC die key keeps its discovered channel and joins the die zone. */
+		if (of_property_match_string(hwmon->dev->of_node, "apple,soc-die-keys",
+					     sensor->label) >= 0) {
+			sensor->die = true;
+			hwmon->die_count++;
+		}
 	}
 
 	return 0;
@@ -1363,11 +1372,9 @@ static int macsmc_hwmon_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	if (macsmc_hwmon_is_m3()) {
-		ret = macsmc_hwmon_create_pressure(hwmon, hwmon->dev->of_node);
-		if (ret)
-			return ret;
-	}
+	ret = macsmc_hwmon_create_pressure(hwmon, hwmon->dev->of_node);
+	if (ret)
+		return ret;
 
 	ret = macsmc_hwmon_discover_temperatures(hwmon);
 	if (ret)
@@ -1392,17 +1399,17 @@ static int macsmc_hwmon_probe(struct platform_device *pdev)
 	hwmon->hwmon_dev = devm_hwmon_device_register_with_info(&pdev->dev,
 								"macsmc_hwmon", hwmon,
 								&hwmon->chip_info,
-								macsmc_hwmon_is_m3() ? macsmc_hwmon_extra_groups : NULL);
+								macsmc_hwmon_extra_groups);
 	if (IS_ERR(hwmon->hwmon_dev))
 		return dev_err_probe(hwmon->dev, PTR_ERR(hwmon->hwmon_dev),
 				     "Probing SMC hwmon device failed\n");
 
-	if (macsmc_hwmon_is_m3()) {
+	if (macsmc_hwmon_is_m3())
 		macsmc_hwmon_debugfs_init(hwmon);
-		ret = macsmc_hwmon_die_register(hwmon);
-		if (ret)
-			return ret;
-	}
+
+	ret = macsmc_hwmon_die_register(hwmon);
+	if (ret)
+		return ret;
 
 	dev_dbg(hwmon->dev, "Registered SMC hwmon device. Sensors:\n");
 	dev_dbg(hwmon->dev,
