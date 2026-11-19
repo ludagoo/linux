@@ -35,6 +35,26 @@ normal drain barrier; Flush is reserved for cancellation before Stop and Close.
 KUnit checks the 1080p and 4K fields directly from the clean ledgers and embeds
 no Apple command image.
 
+H.264 P pictures of 6070.11.1 are references. With the Process timescale word
+nonzero, every P slice has nal_ref_idc 0 and frame_num stays 1; with
+pic_order_cnt_type 2 that gives the P pictures of a GOP one picture order
+count, which H.264 7.4.2.1.1 does not allow, and a decoder that outputs in
+picture order shows them out of order. With the word zero, P slices have
+nal_ref_idc 1 and frame_num counts up; the presentation time is a separate
+word and still counts in the same timescale. The driver writes zero for H.264.
+Start words 0xff98, 0xffa4 and 0xffa8 are the motion lambdas of the full-pel
+search and of the inter and intra mode decisions. With all three zero, most P
+macroblocks are coded as 8x8 partitions; the driver writes 64, 256 and 64.
+
+Where these come from: the two fields were located by reverse engineering how
+the T6021 firmware consumes its Start and Process commands (no listing or
+firmware data is reproduced here), then confirmed on a J475c by changing each
+word and reading the coded stream: nal_ref_idc and frame_num of every slice,
+the share of 8x8 partitions, and the bit rate. 64, 256 and 64 are our own
+values, chosen by measurement on one 720p clip; what macOS writes there is not
+known. The decode-order result was reproduced on T6000 and T8112 by decoding
+every frame in picture order and comparing it with a software decode.
+
 Lifecycle-only validation
 -------------------------
 
