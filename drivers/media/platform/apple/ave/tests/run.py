@@ -57,7 +57,9 @@ def build(src, out, baseline):
     # Later firmware builds; an older baseline does not define them.
     for name in ('AVE_MCTF_BUFS', 'AVE_MCTF_IN_BUFS',
                  'AVE_MCTF_OUT_BUFS', 'AVE_MCTF_POOL_LENT', 'AVE_MCTF_POOL_READY',
-                 'AVE_6070_CONFIG_SHARED_ADDR', 'AVE_6070_CONFIG_SHARED_SIZE'):
+                 'AVE_6070_CONFIG_SHARED_ADDR', 'AVE_6070_CONFIG_SHARED_SIZE',
+                 'AVE_AVC_ME_FULLPEL_LAMBDA', 'AVE_AVC_MD_INTER_LAMBDA',
+                 'AVE_AVC_MD_INTRA_LAMBDA'):
         m = re.search(r'^#define ' + name + r'\s+[^\n]+', header, re.M)
         if m:
             code += m[0] + '\n'

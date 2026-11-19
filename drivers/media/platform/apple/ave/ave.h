@@ -428,6 +428,8 @@ struct ave_params {
 	u32 mbs; /* 16x16 macroblocks */
 	u32 fps_num, fps_den; /* frames per second = num / den */
 	u32 fps_int; /* the same, rounded */
+	/* The layout's encode settings, see struct ave_fw_layout. */
+	bool h264_inter;
 	u32 slots;
 	u32 refs; /* max_num_ref_frames + 1 */
 	bool bframes;
@@ -486,6 +488,13 @@ struct ave_frame_result {
 #define AVE_AVC_FLAT_SCALING_WEIGHT 16
 #define AVE_AVC_RECON_SKIP_MODE 3
 #define AVE_AVC_STATIC_AREA_MASK_ALL 0xffff
+/*
+ * 6070 H.264 motion lambdas (Start h264_me_fullpel_lambda,
+ * h264_md_inter_lambda, h264_md_intra_lambda), chosen by measurement.
+ */
+#define AVE_AVC_ME_FULLPEL_LAMBDA 64
+#define AVE_AVC_MD_INTER_LAMBDA 256
+#define AVE_AVC_MD_INTRA_LAMBDA 64
 
 struct ave_session {
 	struct ave_session *failed_next;
