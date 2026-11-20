@@ -214,3 +214,306 @@
 &m2_ave1 {
 	status = "okay";
 };
+
+/*
+ * Enable dcpext2 and dcpext3 as additional USB-C display pipelines so the
+ * Studio can drive three displays (HDMI on dcpext0 plus two rear USB-C ports,
+ * or three rear USB-C ports). The peripheral nodes are defined disabled in
+ * t6021-j475c-peripherals.dtsi. Keep m2_dcpext2 and m2_dcpext3 disabled here:
+ * aura reserves their firmware, sets apple,firmware-compat, and enables each
+ * dcpextN alias whose IOP exists in the ADT; an "okay" dcpext that cannot
+ * probe would leave the Type-C muxes unregistered and stall every rear port.
+ */
+/ {
+	aliases {
+		dcpext2 = &m2_dcpext2;
+		dcpext3 = &m2_dcpext3;
+	};
+
+	clk_dispext2: clock-dispext2 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <0>;
+		clock-output-names = "clk_dispext2";
+	};
+
+	clk_dispext3: clock-dispext3 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <0>;
+		clock-output-names = "clk_dispext3";
+	};
+};
+
+&display {
+	iommus = <&dispext0_dart 0 0x100 0x0 0x10 0x0>,
+		 <&dispext1_dart 0 0x100 0x0 0x10 0x0>,
+		 <&m2_dart_dispext2_0 0>,
+		 <&m2_dart_dispext3_0 0>;
+};
+
+&m2_dart_dispext2_0 {
+	apple,dma-range = <0x100 0x0 0x10 0x0>;
+	status = "okay";
+};
+
+&m2_dart_dcpext2 {
+	apple,dma-range = <0x100 0x0 0x10 0x0>;
+	status = "okay";
+};
+
+&m2_dcpext2_mbox {
+	power-domains = <&ps_dispext2_cpu0>;
+	resets = <&ps_dispext2_cpu0>;
+	status = "okay";
+};
+
+&m2_dcpext2 {
+	apple,bw-scratch = <&pmgr_dcp 0 4 0x1220>;
+	apple,iomfb-surfaces = <1 1 0 1>;
+	resets = <&ps_dispext2_cpu0>;
+	clocks = <&clk_dispext2>;
+	apple,dcp-index = <3>;
+	apple,connector-type = "USB-C";
+	phys = <&atcphy0 PHY_TYPE_DP>, <&atcphy1 PHY_TYPE_DP>,
+	       <&atcphy2 PHY_TYPE_DP>, <&atcphy3 PHY_TYPE_DP>;
+	phy-names = "typec0", "typec1", "typec2", "typec3";
+	mux-controls = <&atcphy0_xbar 0>, <&atcphy1_xbar 0>,
+		       <&atcphy2_xbar 0>, <&atcphy3_xbar 0>;
+	mux-control-names = "typec0", "typec1", "typec2", "typec3";
+	apple,typec-mux-indices = <4 4 4 4>;
+	apple,typec-dptx-phys = <0 1 2 3>;
+	status = "disabled";
+
+	typec-routes {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		route@0 {
+			reg = <0>;
+			mode-switch;
+
+			port {
+				dcpext2_typec0: endpoint {
+					remote-endpoint = <&typec0_dcpext2>;
+				};
+			};
+		};
+
+		route@1 {
+			reg = <1>;
+			mode-switch;
+
+			port {
+				dcpext2_typec1: endpoint {
+					remote-endpoint = <&typec1_dcpext2>;
+				};
+			};
+		};
+
+		route@2 {
+			reg = <2>;
+			mode-switch;
+
+			port {
+				dcpext2_typec2: endpoint {
+					remote-endpoint = <&typec2_dcpext2>;
+				};
+			};
+		};
+
+		route@3 {
+			reg = <3>;
+			mode-switch;
+
+			port {
+				dcpext2_typec3: endpoint {
+					remote-endpoint = <&typec3_dcpext2>;
+				};
+			};
+		};
+	};
+};
+
+&m2_dart_dispext3_0 {
+	apple,dma-range = <0x100 0x0 0x10 0x0>;
+	status = "okay";
+};
+
+&m2_dart_dcpext3 {
+	apple,dma-range = <0x100 0x0 0x10 0x0>;
+	status = "okay";
+};
+
+&m2_dcpext3_mbox {
+	power-domains = <&ps_dispext3_cpu0>;
+	resets = <&ps_dispext3_cpu0>;
+	status = "okay";
+};
+
+&m2_dcpext3 {
+	apple,bw-scratch = <&pmgr_dcp 0 4 0x1228>;
+	apple,iomfb-surfaces = <1 1 0 1>;
+	resets = <&ps_dispext3_cpu0>;
+	clocks = <&clk_dispext3>;
+	apple,dcp-index = <4>;
+	apple,connector-type = "USB-C";
+	phys = <&atcphy0 PHY_TYPE_DP>, <&atcphy1 PHY_TYPE_DP>,
+	       <&atcphy2 PHY_TYPE_DP>, <&atcphy3 PHY_TYPE_DP>;
+	phy-names = "typec0", "typec1", "typec2", "typec3";
+	mux-controls = <&atcphy0_xbar 0>, <&atcphy1_xbar 0>,
+		       <&atcphy2_xbar 0>, <&atcphy3_xbar 0>;
+	mux-control-names = "typec0", "typec1", "typec2", "typec3";
+	apple,typec-mux-indices = <6 6 6 6>;
+	apple,typec-dptx-phys = <0 1 2 3>;
+	status = "disabled";
+
+	typec-routes {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		route@0 {
+			reg = <0>;
+			mode-switch;
+
+			port {
+				dcpext3_typec0: endpoint {
+					remote-endpoint = <&typec0_dcpext3>;
+				};
+			};
+		};
+
+		route@1 {
+			reg = <1>;
+			mode-switch;
+
+			port {
+				dcpext3_typec1: endpoint {
+					remote-endpoint = <&typec1_dcpext3>;
+				};
+			};
+		};
+
+		route@2 {
+			reg = <2>;
+			mode-switch;
+
+			port {
+				dcpext3_typec2: endpoint {
+					remote-endpoint = <&typec2_dcpext3>;
+				};
+			};
+		};
+
+		route@3 {
+			reg = <3>;
+			mode-switch;
+
+			port {
+				dcpext3_typec3: endpoint {
+					remote-endpoint = <&typec3_dcpext3>;
+				};
+			};
+		};
+	};
+};
+
+&typec0 {
+	ports {
+		port@3 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			/delete-node/ endpoint;
+
+			typec0_dcp: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&dcpext1_typec0>;
+			};
+
+			typec0_dcpext2: endpoint@2 {
+				reg = <2>;
+				remote-endpoint = <&dcpext2_typec0>;
+			};
+
+			typec0_dcpext3: endpoint@3 {
+				reg = <3>;
+				remote-endpoint = <&dcpext3_typec0>;
+			};
+		};
+	};
+};
+
+&typec1 {
+	ports {
+		port@3 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			/delete-node/ endpoint;
+
+			typec1_dcp: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&dcpext1_typec1>;
+			};
+
+			typec1_dcpext2: endpoint@2 {
+				reg = <2>;
+				remote-endpoint = <&dcpext2_typec1>;
+			};
+
+			typec1_dcpext3: endpoint@3 {
+				reg = <3>;
+				remote-endpoint = <&dcpext3_typec1>;
+			};
+		};
+	};
+};
+
+&typec2 {
+	ports {
+		port@3 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			/delete-node/ endpoint;
+
+			typec2_dcp: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&dcpext1_typec2>;
+			};
+
+			typec2_dcpext2: endpoint@2 {
+				reg = <2>;
+				remote-endpoint = <&dcpext2_typec2>;
+			};
+
+			typec2_dcpext3: endpoint@3 {
+				reg = <3>;
+				remote-endpoint = <&dcpext3_typec2>;
+			};
+		};
+	};
+};
+
+&typec3 {
+	ports {
+		port@3 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			/delete-node/ endpoint;
+
+			typec3_dcp: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&dcpext1_typec3>;
+			};
+
+			typec3_dcpext2: endpoint@2 {
+				reg = <2>;
+				remote-endpoint = <&dcpext2_typec3>;
+			};
+
+			typec3_dcpext3: endpoint@3 {
+				reg = <3>;
+				remote-endpoint = <&dcpext3_typec3>;
+			};
+		};
+	};
+};
